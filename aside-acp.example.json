@@ -1,0 +1,12 @@
+{
+  "_comment": "aside-acp config. Paths left empty are auto-detected. Config file location: ~/.aside-acp.json (optional; env ASIDE_ACP_CONFIG overrides).",
+  "aside_cli": "",
+  "account": null,
+  "owner_name": "the owner",
+  "default_model": "",
+  "default_effort": "medium",
+  "exec_timeout_seconds": 1200,
+  "style": "formal",
+  "grant_full_access": true,
+  "approved_models": null
+}

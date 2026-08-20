@@ -1,0 +1,20 @@
+{
+  "name": "aside-acp",
+  "version": "0.1.0",
+  "description": "Wrap the Aside browser agent as an ACP (Agent Client Protocol) server so Paseo can drive it remotely.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/client.mjs"
+  },
+  "bin": {
+    "aside-acp": "server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.17.1"
+  }
+}

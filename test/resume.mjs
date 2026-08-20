@@ -87,7 +87,7 @@ async function main() {
   const persistFile = join(os.homedir(), ".aside-acp", "sessions", `${sessionId}.json`);
 
   // ---- second connection: resume -----------------------------------------
-  const { connection: conn2, client: client2 } = connect();
+  const { agentProcess: proc2, connection: conn2, client: client2 } = connect();
   let resumedAside = null;
   try {
     await conn2.initialize({ protocolVersion: acp.PROTOCOL_VERSION });
@@ -110,11 +110,12 @@ async function main() {
       `${saved.asideSid} vs ${asideSessionDir}`);
   } finally {
     conn2.close?.().catch?.(() => {});
+    try { proc2.kill("SIGKILL"); } catch {}
   }
 
   const failed = results.filter((r) => !r).length;
   console.log(`\n${results.length - failed}/${results.length} passed`);
-  process.exitCode = failed ? 1 : 0;
+  process.exit(failed ? 1 : 0);
 }
 
 main().catch((e) => {

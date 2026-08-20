@@ -44,6 +44,12 @@ import {
   BOOTSTRAP_MARKER,
 } from "./lib/persona.js";
 import {
+  hasFormElicitation,
+  questionsToSchema,
+  acceptedReplyText,
+  declinedReplyText,
+} from "./lib/elicitation.js";
+import {
   enumerateModels,
   buildConfigOptions,
   buildModelState,
@@ -52,6 +58,7 @@ import {
 
 const VERSION = "0.1.0";
 const APPROVAL_LOOP_LIMIT = 4;
+const QUESTION_LOOP_LIMIT = 3;
 const PERMISSION_TIMEOUT_MS = 15 * 60 * 1000;
 const TRANSCRIPT_POLL_MS = 300;
 const GHOST_WAIT_TIMEOUT_MS = 180000;
@@ -78,6 +85,7 @@ class AsideACP {
     this.cli = null;
     this.accountRoot = null;
     this.models = [];
+    this.clientElicitation = { form: false, url: false };
     this.sessions = new Map(); // acpSessionId -> SessionState
     this.sessionsRoot = path.join(os.homedir(), ".aside-acp", "sessions");
   }
@@ -93,7 +101,19 @@ class AsideACP {
 
   // --- ACP methods ---------------------------------------------------------
 
-  async initialize() {
+  async initialize(params) {
+    // Capability negotiation: remember whether the client can render
+    // elicitation forms so [[QUESTION]] can be upgraded from a plain text
+    // block to a real elicitation/create (form mode).
+    this.clientElicitation = {
+      form: hasFormElicitation(params?.clientCapabilities),
+      url: !!(params?.clientCapabilities?.elicitation?.url),
+    };
+    if (this.clientElicitation.form || this.clientElicitation.url) {
+      log(
+        `client elicitation support: form=${this.clientElicitation.form} url=${this.clientElicitation.url}`,
+      );
+    }
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {
@@ -322,6 +342,11 @@ class AsideACP {
       pp.resolve({ outcome: { outcome: "cancelled" } });
       st.pendingPermission = null;
     }
+    const pe = st.pendingElicitation;
+    if (pe) {
+      pe.resolve();
+      st.pendingElicitation = null;
+    }
     log(`cancel requested for session ${st.sessionId} (ghost=${!!st.ghostExec})`);
   }
 
@@ -341,6 +366,7 @@ class AsideACP {
     const sid = st.asideSid;
 
     let approvals = 0;
+    let questionLoops = 0;
     let stopReason = "end_turn";
     let inject = promptText;
     let emptyRetries = 0;
@@ -368,25 +394,55 @@ class AsideACP {
       }
 
       const approval = parseApproval(result.finalText);
-      if (!approval) break;
-      if (approvals >= APPROVAL_LOOP_LIMIT) {
-        log(`approval loop limit reached; leaving approval as text`);
+      if (approval) {
+        if (approvals >= APPROVAL_LOOP_LIMIT) {
+          log(`approval loop limit reached; leaving approval as text`);
+          break;
+        }
+        approvals += 1;
+        log(`approval request: ${approval.action}`);
+        const outcome = await this.requestApproval(st, approval);
+        // requestPermission resolves { outcome: { outcome, optionId } }
+        const decision = outcome?.outcome;
+        if (!decision || decision.outcome !== "selected") {
+          if (decision?.outcome === "cancelled") stopReason = "cancelled";
+          break; // user ignored/denied at UI level → leave as text
+        }
+        inject =
+          decision.optionId === "allow"
+            ? approvalGrantedText(approval.action)
+            : approvalDeniedText(approval.action);
+        // loop → run the continuation turn
+        continue;
+      }
+
+      const question = parseQuestion(result.finalText);
+      if (question) {
+        if (questionLoops >= QUESTION_LOOP_LIMIT) {
+          log(`question loop limit reached; leaving question as text`);
+          break;
+        }
+        questionLoops += 1;
+        if (this.clientElicitation.form) {
+          log(`question via elicitation: ${question.question || question.header}`);
+          const outcome = await this.askElicitation(st, question);
+          if (outcome === null) {
+            // client cancelled the turn / timed out / transport error →
+            // leave the question as text (same as the text protocol)
+            break;
+          }
+          inject = outcome.replyText;
+          if (outcome.accepted) continue; // continuation turn with the answer
+          // declined: continue so aside can acknowledge briefly and stand by
+          continue;
+        }
+        // No elicitation support: surface the question as plain text (the
+        // owner replies with a normal follow-up message).
         break;
       }
-      approvals += 1;
-      log(`approval request: ${approval.action}`);
-      const outcome = await this.requestApproval(st, approval);
-      // requestPermission resolves { outcome: { outcome, optionId } }
-      const decision = outcome?.outcome;
-      if (!decision || decision.outcome !== "selected") {
-        if (decision?.outcome === "cancelled") stopReason = "cancelled";
-        break; // user ignored/denied at UI level → leave as text
-      }
-      inject =
-        decision.optionId === "allow"
-          ? approvalGrantedText(approval.action)
-          : approvalDeniedText(approval.action);
-      // loop → run the continuation turn
+
+      // Neither an approval nor a question block: normal end of turn.
+      break;
     }
     return { stopReason, usage: null, userMessageId: params.messageId ?? null };
   }
@@ -677,6 +733,56 @@ class AsideACP {
       });
 
     return await Promise.race([req, cancelPromise, timeout]);
+  }
+
+  /**
+   * Upgrade a [[QUESTION]] block to a real ACP elicitation (form mode) when
+   * the client advertises elicitation support. Returns:
+   *   { accepted: true, replyText }  → user answered, inject and continue
+   *   { accepted: false, replyText } → user declined, inject and continue
+   *   null                           → cancelled / timed out / transport error
+   */
+  async askElicitation(st, question) {
+    const requestedSchema = questionsToSchema([question]);
+    const message = question.question || question.header || "The agent needs your input.";
+    let resolveCancel;
+    const cancelPromise = new Promise((resolve) => {
+      resolveCancel = resolve;
+    });
+    st.pendingElicitation = {
+      resolve: () => resolveCancel(null),
+    };
+
+    const timeout = new Promise((resolve) => {
+      setTimeout(() => resolve(null), PERMISSION_TIMEOUT_MS);
+    });
+
+    const req = this.conn
+      .unstable_createElicitation({
+        sessionId: st.sessionId,
+        mode: "form",
+        message,
+        requestedSchema,
+      })
+      .then((r) => {
+        st.pendingElicitation = null;
+        return r;
+      })
+      .catch((e) => {
+        st.pendingElicitation = null;
+        log(`elicitation/create failed: ${e?.message || e}`);
+        return null;
+      });
+
+    const res = await Promise.race([req, cancelPromise, timeout]);
+    if (!res) return null;
+    if (res.action === "accept") {
+      return { accepted: true, replyText: acceptedReplyText(res.content, [question]) };
+    }
+    if (res.action === "decline") {
+      return { accepted: false, replyText: declinedReplyText() };
+    }
+    return null; // cancel / unknown action
   }
 }
 

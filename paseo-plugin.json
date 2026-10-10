@@ -1,0 +1,7 @@
+{
+  "id": "aside-acp",
+  "name": "Aside browser agent",
+  "description": "Use Aside's browser agent from Paseo, with model selection, streamed replies and persistent sessions.",
+  "requirements": { "paseo": ">=0.11.2 <0.12.0" },
+  "build": [["npm", "ci", "--omit=dev"]]
+}

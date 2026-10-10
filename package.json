@@ -1,12 +1,16 @@
 {
   "name": "aside-acp",
-  "version": "0.1.0",
-  "description": "Wrap the Aside browser agent as an ACP (Agent Client Protocol) server so Paseo can drive it remotely.",
+  "version": "0.2.0",
+  "description": "Aside browser agent provider plugin for Paseo, with a standalone ACP server.",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/client.mjs"
+    "test": "node test/client.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:resume": "node test/resume.mjs",
+    "test:plugin": "node test/plugin.mjs",
+    "test:unit": "node --test test/protocol.mjs"
   },
   "bin": {
     "aside-acp": "server.js"
@@ -15,6 +19,47 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^1.2.1"
+    "@agentclientprotocol/sdk": "^1.8.0",
+    "zod": "^4.4.3"
+  },
+  "files": [
+    "paseo-plugin.json",
+    "OVERVIEW.md",
+    "index.server.ts",
+    "icon.svg",
+    "server/",
+    "server.js",
+    "lib/",
+    "aside-acp.example.json",
+    "scripts/",
+    "CHANGELOG.md",
+    "docs/",
+    "CONTRIBUTING.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JasprW/aside-acp.git"
+  },
+  "keywords": [
+    "paseo",
+    "paseo-plugin",
+    "acp",
+    "aside",
+    "browser"
+  ],
+  "devDependencies": {
+    "@getpaseo/plugin": "0.11.2",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  },
+  "exports": {
+    "./agent": {
+      "types": "./server/agent.d.ts",
+      "import": "./server/agent.js"
+    },
+    "./config": "./server/lib/aside.js"
+  },
+  "bugs": {
+    "url": "https://github.com/JasprW/aside-acp/issues"
   }
 }

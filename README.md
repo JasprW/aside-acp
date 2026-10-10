@@ -1,75 +1,126 @@
-# aside-acp
+# Aside ACP provider for Paseo
 
-Wrap the [Aside](https://aside.so) browser agent as an **ACP** (Agent Client
-Protocol) server, so [Paseo](https://paseo.sh) can drive it remotely — from
-the CLI, the desktop app, or the Hub (phone/anywhere via Paseo's relay).
+Use [Aside](https://aside.com)'s browser agent from [Paseo](https://paseo.sh). Select **Aside** when creating an agent, choose a model and thinking effort, then send browser tasks from desktop or mobile.
 
-Built by adapting the proven mechanics of
-[aside-telegram-bridge](https://github.com/SaiAmartya/aside-telegram-bridge):
-`aside exec` per turn, `messages.jsonl` polling for streaming, the
-`[[QUESTION]]`/`[[APPROVAL]]` soft-confirm protocol, full-access sessions.
-The difference: instead of Telegram buttons, approvals surface through
-**Paseo's native Approve/Deny UI** (`session/request_permission`).
+The same project also provides an ACP server over stdio for other ACP clients.
+
+The separately packaged Paseo plugin is [paseo-aside-provider](https://github.com/JasprW/paseo-aside-provider). It pins a released revision of this bridge and is the recommended GitHub installation:
+
+```sh
+paseo plugin install git:JasprW/paseo-aside-provider
+```
+
+Use only one Aside provider installation at a time. This repository retains its local plugin entry for development and compatibility.
+
+## Requirements
+
+- Paseo 0.11.2, with trusted plugins enabled.
+- Aside running and signed in on the daemon machine, with its CLI installed.
+- Aside CLI 1.26.1010.1739 or newer. This bridge uses `session resume`, `session stop`, and session model updates.
+- Node.js 20 or newer for the standalone server and development tools.
+
+The current integration is verified on macOS with a local Aside browser profile.
+
+## Install locally
+
+```sh
+cd ~/Dev/aside-acp
+npm ci
+npm run typecheck
+npm run test:unit           # protocol regressions; no live account needed
+node scripts/install-paseo-plugin.mjs
+```
+
+The installer backs up `~/.paseo/config.json`, migrates this project's old `agents.providers.aside` ACP registration, and installs or reloads the plugin. It uses hot reload; a daemon restart is unnecessary. It refuses to overwrite a different custom provider or plugin source.
+
+If you have never registered the old bridge, you can install directly:
+
+```sh
+paseo plugin install /absolute/path/to/aside-acp
+```
+
+Plugin ID: `aside-acp`. Provider ID: `aside`.
+
+```sh
+paseo provider diagnostic aside
+paseo run --provider aside "Open https://example.com and tell me the page title. Read only."
+paseo plugin reload aside-acp
+paseo plugin remove aside-acp
+```
+
+Create a new Paseo agent after migrating. Legacy custom-provider agents use a different Paseo persistence format. Their underlying Aside sessions and bridge mapping files are retained.
+
+## Configuration
+
+Copy `aside-acp.example.json` to `~/.aside-acp.json` if you need to customize the bridge. Existing configuration remains compatible.
+
+| Field | Purpose |
+| --- | --- |
+| `aside_cli` | CLI executable path; otherwise resolved from PATH and Aside's installation |
+| `account` | Local Aside account number; otherwise the current account |
+| `default_model` | Qualified `provider/model` ID; otherwise Aside's default |
+| `default_effort` | Thinking level, default `medium` |
+| `approved_models` | Optional list of allowed model IDs or model provider IDs |
+| `exec_timeout_seconds` | Maximum time per turn, default 1200 seconds |
+| `style` | Bridge persona, `formal` or `casual` |
+| `owner_name` | Name used in the bridge persona |
+| `grant_full_access` | Run Aside sessions with full access; default `true` |
+
+Environment overrides: `ASIDE_ACP_CONFIG` selects the configuration file, `ASIDE_ACP_CLI` selects the executable, and `ASIDE_HOME` selects Aside's data directory. `ASIDE_ACP_LOG_FILE` optionally records bridge diagnostics. Reload the plugin after changing daemon environment variables. Per-agent Paseo environment overrides are not forwarded by the in-process ACP connector.
+
+Models are read from the selected account's `models.json` and cached model catalog. Availability in the picker does not guarantee that an upstream model subscription has quota.
 
 ## How it works
 
-```
-Paseo daemon ──spawn──> node server.js  (ACP over stdio, ND-JSON)
-                             │
-                             ├─ aside exec -m <provider/model> [--session <sid>] [--effort <lvl>] <prompt>
-                             │     └─ polls ~/.aside/u/<n>/sessions/<sid>/messages.jsonl
-                             │        (new assistant text → session/update agent_message_chunk)
-                             ├─ aside repl aside.sessions.update('<sid>', {permissionMode:'full-access'})
-                             └─ [[APPROVAL]] block → session/request_permission → inject grant → continue
+```text
+Paseo provider API → official runAcpProvider shim → ACP object streams
+                                                   ↓
+                                              Aside bridge
+                                                   ↓
+                             aside exec / session resume → Aside browser
 ```
 
-- Sessions are lazy: `session/new` returns a UUID; the aside session is
-  created (persona bootstrap) on the first `session/prompt`.
-- Model enumeration comes from `~/.aside/u/<n>/models.json`, so every entry
-  in Paseo's model picker is a valid `provider/model` id for `aside exec -m`.
-- The aside session runs **full-access** (aside's CLI has no
-  non-interactive confirmation path) — the soft protocol is the gate.
+The plugin bundles the bridge, so no project-specific Node path or separately installed `aside-acp` executable is needed. The official Paseo ACP shim handles model controls, approval UI and timeline conversion.
 
-## Install / run
+The bridge creates Aside sessions lazily on the first prompt, polls `messages.jsonl` for assistant text, and stores session mappings plus replayable conversation text in `~/.aside-acp/sessions`. Reloading an agent resumes the same Aside session. Model and thinking changes are applied to that session through Aside's session API.
 
-```bash
-cd ~/Dev/aside-acp
-npm install
-node test/client.mjs      # E2E against real aside (initialize→prompt→cancel)
-node test/approval.mjs    # approval translation flow (simulated action)
+Approvals use the existing `[[APPROVAL]]` convention and appear as Paseo permission requests. `[[QUESTION]]` requests become forms when the ACP client supports elicitation; otherwise they remain text questions. Cancellation terminates the CLI turn, whose SIGTERM handler cancels the native Aside task.
+
+## Limits and permissions
+
+- Full access is enabled by default. The model is instructed to ask before external actions. This convention is prompt based and is not an enforced permission boundary.
+- Only assistant text is streamed. Browser tool calls and model thinking are not individually rendered in Paseo.
+- Image/audio prompts and MCP servers are unsupported.
+- The connector uses the daemon's local configuration and Aside browser profile. Remote Aside hosts are not configured by this plugin.
+- Conversation text is stored locally for replay. Diagnostic logs can contain prompts and model errors.
+
+## Development and verification
+
+```sh
+npm run typecheck
+npm test                    # real browser: example.com, controls, cancellation
+npm run test:resume          # ACP disconnect/reconnect and native session reuse
+node test/approval.mjs       # simulated approval; no email is sent
+npm run test:plugin          # real Paseo plugin, reload, resume, cancel, errors
 ```
 
-Config: `~/.aside-acp.json` (optional). Fields: `aside_cli`, `account`,
-`owner_name`, `default_model`, `default_effort`, `exec_timeout_seconds`,
-`style` (formal|casual), `grant_full_access`, `approved_models`.
+Live tests require a signed-in Aside account and can consume model quota. They operate on public pages or simulated tasks. The plugin test creates and archives its own Paseo test agent.
 
-## Register as a Paseo provider
+Structure:
 
-```bash
-node scripts/register-paseo-provider.mjs   # adds agents.providers.aside to ~/.paseo/config.json
-launchctl unload ~/Library/LaunchAgents/com.paseo.daemon.plist
-launchctl load -w ~/Library/LaunchAgents/com.paseo.daemon.plist
-paseo run --provider aside "Open https://example.com and tell me the page title"
-# remove: node scripts/register-paseo-provider.mjs --remove
-```
+- `index.server.ts`: Paseo provider registration.
+- `server/connector.ts`: ACP object-stream connection and cleanup.
+- `server/history.ts`: conversation replay supplement for Paseo 0.11.2.
+- `server/agent.js`, `server/lib/`: shared bridge implementation.
+- `server.js`: standalone stdio entry.
+- `lib/`: compatibility exports for existing ACP consumers.
+- `scripts/install-paseo-plugin.mjs`: local installation and legacy migration.
+- `test/`: live ACP and Paseo integration tests.
 
-## Pitfalls learned (all fixed here)
+See [verification results](docs/verification.md) and [contributing](CONTRIBUTING.md).
 
-1. `aside exec --session` wants the **id suffix** (`66LMoOymEbb153gS`), not
-   the full `<date>_<id>` dir name — and it exits 0 with
-   "Session not found" on stderr. Silent failure trap.
-2. `messages.jsonl` contains multi-byte chars; slice it as a **Buffer by
-   byte offset**, never `string.slice(offset)`, or JSON lines corrupt.
-   Also handle compaction rewrites (size shrinks) by full re-scan + dedupe.
-3. `requestPermission` resolves `{ outcome: { outcome, optionId } }` —
-   check the nested object.
-4. SDK `ndJsonStream(output, input)` — writable FIRST, readable second
-   (the official examples name them misleadingly).
-5. Paseo probes ACP providers with throwaway connections — make
-   `session/new` lazy or probes burn real aside sessions.
+## Embedded bridge API
 
-## Known minor issue
+Consumers can import `connectAsideAgent` from `aside-acp/agent` and supply ACP object streams. It returns the SDK connection plus an async `dispose()` function. Configuration is loaded once for each connection. The standalone `aside-acp` executable remains available.
 
-Paseo logs a non-fatal zod warning (`compactSnapshot … models … label`)
-while rendering some timeline entries; agents still complete and render
-correctly. Investigate if the timeline ever shows garbled model info.
+The persona and soft confirmation convention were adapted from [aside-telegram-bridge](https://github.com/SaiAmartya/aside-telegram-bridge).

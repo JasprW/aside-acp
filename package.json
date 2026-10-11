@@ -55,7 +55,10 @@
     "typescript": "^5.9.3"
   },
   "exports": {
-    "./provider-permissions": "./server/permissions.ts",
+    "./provider-permissions": {
+      "types": "./server/permissions.d.ts",
+      "import": "./server/permissions.ts"
+    },
     "./agent": {
       "types": "./server/agent.d.ts",
       "import": "./server/agent.js"

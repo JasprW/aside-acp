@@ -1,6 +1,6 @@
 {
   "name": "aside-acp",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Aside browser agent provider plugin for Paseo, with a standalone ACP server.",
   "type": "module",
   "main": "server.js",
@@ -57,7 +57,11 @@
       "types": "./server/agent.d.ts",
       "import": "./server/agent.js"
     },
-    "./config": "./server/lib/aside.js"
+    "./config": "./server/lib/aside.js",
+    "./sessions": {
+      "types": "./server/lib/sessions.d.ts",
+      "import": "./server/lib/sessions.js"
+    }
   },
   "bugs": {
     "url": "https://github.com/JasprW/aside-acp/issues"

@@ -33,6 +33,7 @@ import {
 } from "./lib/aside.js";
 import { JsonlTail, AsideTurnStream } from "./lib/stream.js";
 import { providerErrorMessage } from "./lib/errors.js";
+import { listAsideSessions, parseNativeSessionId, getAsideSession, readAsideHistory } from "./lib/sessions.js";
 import {
   buildBootstrapPrompt,
   buildReminder,
@@ -55,7 +56,7 @@ import {
   EFFORT_LEVELS,
 } from "./lib/models.js";
 
-const VERSION = "0.2.2";
+const VERSION = "0.3.0";
 const APPROVAL_LOOP_LIMIT = 4;
 const QUESTION_LOOP_LIMIT = 3;
 const PERMISSION_TIMEOUT_MS = 15 * 60 * 1000;
@@ -144,7 +145,7 @@ export class AsideACP {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: true,
-        sessionCapabilities: {},
+        sessionCapabilities: { list: {} },
         promptCapabilities: { audio: false, embeddedContext: false, image: false },
         mcpCapabilities: { http: false, sse: false },
       },
@@ -156,6 +157,12 @@ export class AsideACP {
     return {};
   }
 
+  async listSessions(params = {}) {
+    if (params.cursor) throw new RequestError(-32602, "Aside returns the complete session list without a cursor");
+    const sessions = await listAsideSessions({ accountRoot: this.accountRoot, sessionsRoot: this.sessionsRoot, cwd: params.cwd ?? undefined });
+    return { sessions };
+  }
+
   async newSession(params) {
     const sessionId = randomUUID();
     this.sessions.set(sessionId, {
@@ -164,6 +171,7 @@ export class AsideACP {
       model: this.config.default_model,
       effort: this.config.default_effort,
       primed: false,
+      cwd: params.cwd,
       busy: false,
       queue: [],
       history: [],
@@ -258,6 +266,7 @@ export class AsideACP {
           primed: !!st.asideSid,
           history: st.history || [],
           account: this.config.account,
+          cwd: st.cwd,
         }),
         { mode: 0o600 },
       );
@@ -298,11 +307,26 @@ export class AsideACP {
           st.effort = saved.effort ?? st.effort;
           st.primed = true;
           st.history = Array.isArray(saved.history) ? saved.history : [];
+          st.cwd = saved.cwd ?? params.cwd;
           log(`resumed acp session ${sessionId} -> aside session ${st.asideSid}`);
         }
       } catch (error) {
         if (error.code !== "ENOENT") throw error;
         /* never bootstrapped on this host — behave like a fresh session */
+      }
+      const nativeSid = parseNativeSessionId(sessionId, this.accountRoot);
+      if (nativeSid) {
+        const native = await getAsideSession(this.accountRoot, nativeSid);
+        st.asideSid = nativeSid;
+        st.primed = true;
+        st.cwd = native.cwd;
+        if (!st.history.length) {
+          st.history = await readAsideHistory(this.accountRoot, nativeSid);
+          if (this.models.some((model) => model.id === native.model)) st.model = native.model;
+          if (EFFORT_LEVELS.includes(native.effort)) st.effort = native.effort;
+        }
+        this.persistSession(st);
+        log(`bound imported acp session ${sessionId} -> aside session ${nativeSid}`);
       }
       this.sessions.set(sessionId, st);
     }

@@ -50,6 +50,14 @@ paseo plugin remove aside-acp
 
 Create a new Paseo agent after migrating. Legacy custom-provider agents use a different Paseo persistence format. Their underlying Aside sessions and bridge mapping files are retained.
 
+## Import Aside history
+
+Open Paseo’s **Import Sessions**, choose **Aside**, and select a native chat. Use **Show all directories** if the current workspace differs from the chat’s stored directory. Import resumes the existing Aside ID and its browser context; it does not create or prime another chat. Model and thinking choices follow Paseo’s composer controls.
+
+Discovery reads the selected account’s `state.db` through macOS’s `/usr/bin/sqlite3` in read-only mode. It includes visible, non-archived root chats and excludes incognito, ephemeral and child sessions. Titles, directory and last activity are listed, with search and already-imported session filtering.
+
+Import copies user, assistant and reasoning text from `messages.jsonl` into replay history. Tool results and attachments are omitted. The transcript is captured on first import, then bridge replies are appended. Missing/deleted chats or unavailable transcripts produce an explicit error. Listing and import do not run a model turn or change Aside’s database.
+
 ## Configuration
 
 Copy `aside-acp.example.json` to `~/.aside-acp.json` if you need to customize the bridge. Existing configuration remains compatible.

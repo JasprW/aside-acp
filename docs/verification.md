@@ -1,5 +1,9 @@
 # Verification
 
+## 0.3.0 native history import
+
+Static type/syntax checks only; no automated tests, imports or new agent turns were run. The discovery, ACP list and replay contracts were read from Paseo 0.11.2. Aside session metadata and transcript layouts were inspected read-only on the local installation. Import UI rendering and continuation remain for manual testing.
+
 ## 0.2.2 error reporting
 
 Static type/syntax checks only; no new agent turns or UI tests. Existing user-run logs show a successful streamed turn followed by an upstream `Output blocked by content filtering policy` error. This update preserves that cause instead of replacing it with `Aside turn failed`.

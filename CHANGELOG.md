@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- List native Aside history through ACP `session/list` and Paseo Import Sessions.
+- Read titles, working directories and activity from Aside’s index in read-only mode.
+- Apply search and directory filtering before limiting; reuse existing persistence IDs for deduplication.
+- Bind imported sessions to their native IDs and replay user/assistant/reasoning text without a new bootstrap turn.
+- Keep account boundaries and reject missing/deleted native sessions explicitly.
+
 ## 0.2.2
 
 - Preserve upstream error reasons and request IDs in ACP failures.

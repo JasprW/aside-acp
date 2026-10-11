@@ -1,5 +1,11 @@
 # Verification
 
+## 0.4.1 Electron authentication fix
+
+The user-reported missing-helper error was reproduced as a code-signing failure in Paseo Helper (Electron 44.2.0, Node 24.20.0): macOS rejects Aside's native addon because its Team ID differs from Paseo's. The file exists, and standalone Node can load it, but signing then fails with SecItemCopyMatching -34018 because Node lacks Aside's Keychain entitlement. Updating the installed CLI was not the remedy.
+
+Authentication now runs through the signed Aside CLI's normal account-status command using a temporary loopback relay limited to daemon authentication and read-only account-summary routes. A diagnostic from the exact Paseo Helper runtime completed authentication and read an existing native session successfully. It printed only success booleans, not session contents or tokens. Type/syntax/diff checks passed. No automated tests, model turns, permission mutations or approval UI exercises were run; approval decisions remain for manual testing.
+
 ## 0.4.0 native permissions and Final confirm
 
 Static type/syntax/diff checks and plugin installation status only. No automated tests, model turns, native permission mutations or approval UI exercises were run for this update. Existing config-option count expectation was updated for the additional setting. Prior verification results below apply to their stated versions, not this new native relay.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1
+
+- Fix authentication in Paseo's macOS Electron runtime: native addon Team ID validation and Aside Keychain entitlements prevent direct helper loading.
+- Delegate authentication to the signed Aside CLI through a temporary loopback relay, forwarding only the read-only account handshake.
+- Keep daemon tokens in memory and close the relay after authentication; no native modules are loaded into Paseo.
+- Report actual CLI/daemon authentication errors instead of incorrectly telling users to update an existing helper.
+
 ## 0.4.0
 
 - Add native Final confirm (Ask first / Skip confirmation), independent of access mode.

@@ -3,7 +3,6 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { resolveAsideCli } from "./aside.js";
 
-const require = createRequire(import.meta.url);
 const clients = new Map();
 const TIMEOUT_MS = 10000;
 
@@ -18,7 +17,11 @@ function daemonOrigin() {
 }
 
 function loadNativeHelper(cli) {
-  const dir = path.dirname(fs.realpathSync(cli));
+  const executable = fs.realpathSync(cli);
+  // Paseo bundles server plugins as CJS, where import.meta.url is unavailable.
+  // Absolute native addon paths can be loaded with the installed CLI as anchor.
+  const require = createRequire(executable);
+  const dir = path.dirname(executable);
   const paths = [process.env.ASIDE_NATIVE_HELPER_BINDING,
     path.resolve(dir, "../Resources/native/aside-native.node"),
     path.resolve(dir, "native/aside-native.node")].filter(Boolean);

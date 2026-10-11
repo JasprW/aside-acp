@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+- Use Aside’s official brand assets for plugin and provider icons; label the integration unofficial.
+
 - List native Aside history through ACP `session/list` and Paseo Import Sessions.
 - Read titles, working directories and activity from Aside’s index in read-only mode.
 - Apply search and directory filtering before limiting; reuse existing persistence IDs for deduplication.

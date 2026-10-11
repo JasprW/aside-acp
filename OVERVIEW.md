@@ -1,3 +1,5 @@
+Unofficial community integration for Aside, not affiliated with or endorsed by Aside.
+
 Use Aside's browser agent in Paseo with your local Aside account and browser profile. The provider exposes model and thinking effort choices, streams assistant replies and model reasoning, and resumes existing sessions.
 
 Aside’s existing visible chats are available in Import Sessions, with title, directory and last activity. Import resumes the original Aside session and replays user, assistant and reasoning text. Choose Show all directories when the chat belongs to another directory. Discovery reads the local Aside session index with macOS’s SQLite CLI in read-only mode; no model turn is started.

@@ -1,7 +1,7 @@
 {
   "name": "aside-acp",
   "version": "0.3.0",
-  "description": "Aside browser agent provider plugin for Paseo, with a standalone ACP server.",
+  "description": "Unofficial Aside browser agent integration for Paseo, with streaming and native session import.",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -34,7 +34,9 @@
     "scripts/",
     "CHANGELOG.md",
     "docs/",
-    "CONTRIBUTING.md"
+    "CONTRIBUTING.md",
+    "icon.png",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "repository": {
     "type": "git",

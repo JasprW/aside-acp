@@ -1,4 +1,8 @@
-# Aside ACP provider for Paseo
+# Aside ACP provider for Paseo (unofficial)
+
+<img src="icon.png" width="64" alt="Aside logo">
+
+Unofficial community integration. Not affiliated with or endorsed by Aside.
 
 Use [Aside](https://aside.com)'s browser agent from [Paseo](https://paseo.sh). Select **Aside** when creating an agent, choose a model and thinking effort, then send browser tasks from desktop or mobile.
 
@@ -135,3 +139,5 @@ See [verification results](docs/verification.md) and [contributing](CONTRIBUTING
 Consumers can import `connectAsideAgent` from `aside-acp/agent` and supply ACP object streams. It returns the SDK connection plus an async `dispose()` function. Configuration is loaded once for each connection. The standalone `aside-acp` executable remains available.
 
 The persona and soft confirmation convention were adapted from [aside-telegram-bridge](https://github.com/SaiAmartya/aside-telegram-bridge).
+
+Aside branding identifies the integration and is not covered by this repository’s code license. See [third-party notices](THIRD_PARTY_NOTICES.md).

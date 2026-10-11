@@ -28,7 +28,7 @@ test("discovery creates no native Aside session", async () => {
 test("configuration changes return and notify the full option list", async () => {
   const { agent, created, updates } = await fixture();
   const result = await agent.setSessionConfigOption({ sessionId: created.sessionId, configId: "effort", value: "high" });
-  assert.equal(result.configOptions.length, 2);
+  assert.equal(result.configOptions.length, 3);
   assert.equal(result.configOptions[1].currentValue, "high");
   assert.deepEqual(updates.at(-1).update.configOptions, result.configOptions);
 });

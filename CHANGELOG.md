@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+- Add native Final confirm (Ask first / Skip confirmation), independent of access mode.
+- Match Aside's mode defaults: Guard enables confirmation, Read only disables it, Full access preserves it.
+- Relay native file/tool approvals and final-action suspensions into Paseo's permission buttons; reply to the original request with identity and scope checks.
+- Preserve supported permanent grants; handle cancellation, external replies, reconnect and stale buttons.
+- Restore native confirmation on import/resume and refresh both settings before tasks.
+- Correct CLI's forced confirmation-off default before the first task; stop forcing duplicate prompt-based approvals.
+- Use Aside's installed authentication helper for the local daemon; tokens remain in memory.
+
 ## Unreleased
 
 - Reduce provider SVG padding and center the Aside mark, increasing its visible size by 25% to match neighboring provider icons.

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execAsync, detectAccountRoot, loadConfig, transcriptPath } from "./aside.js";
-import { BOOTSTRAP_MARKER, buildReminder } from "./persona.js";
+import { BOOTSTRAP_MARKER, buildReminder, LEGACY_REMINDER } from "./persona.js";
 
 const NATIVE_PREFIX = "aside_native_";
 
@@ -31,7 +31,7 @@ async function querySessions(accountRoot, where) {
   if (!fs.existsSync(database)) throw new Error("Aside session index not found; start and sign in to Aside on this daemon machine");
   // macOS ships sqlite3. No native npm binding or database writes are needed.
   const sqlite = process.platform === "darwin" ? "/usr/bin/sqlite3" : "sqlite3";
-  const query = `SELECT id, title, cwd, model, permission_mode, updated_at, created_at FROM sessions WHERE ${where} ORDER BY updated_at DESC, id ASC`;
+  const query = `SELECT id, title, cwd, model, permission_mode, runtime_config, updated_at, created_at FROM sessions WHERE ${where} ORDER BY updated_at DESC, id ASC`;
   const result = await execAsync(sqlite, ["-readonly", "-json", "-cmd", ".timeout 5000", database, query], { timeoutMs: 15000 });
   if (result.timedOut || result.code !== 0) {
     throw new Error(`Cannot read Aside session index: ${result.stderr.trim() || "SQLite timed out"}`);
@@ -86,7 +86,9 @@ export async function getAsideSession(accountRoot, sid) {
   const row = rows[0];
   let model = {};
   try { model = JSON.parse(row.model || "{}"); } catch { /* use composer defaults */ }
-  return { sid, cwd: sessionCwd(row, accountRoot), model: model.provider && model.modelId ? `${model.provider}/${model.modelId}` : null, effort: model.thinkingLevel ?? null, permissionMode: row.permission_mode };
+  let runtime = {};
+  try { runtime = JSON.parse(row.runtime_config || "{}"); } catch { /* native default is false */ }
+  return { sid, cwd: sessionCwd(row, accountRoot), model: model.provider && model.modelId ? `${model.provider}/${model.modelId}` : null, effort: model.thinkingLevel ?? null, permissionMode: row.permission_mode, finalConfirm: row.permission_mode !== "read-only" && runtime.finalConfirm === true };
 }
 
 /** Read native user/assistant/reasoning text without browser tool results or attachments. */
@@ -97,7 +99,7 @@ export async function readAsideHistory(accountRoot, sid) {
   });
   const items = new Map();
   let skipBootstrap = false;
-  const reminders = [buildReminder("formal"), buildReminder("casual")];
+  const reminders = [buildReminder("formal"), buildReminder("casual"), LEGACY_REMINDER];
   for (const [rowIndex, line] of text.split("\n").entries()) {
     if (!line.trim()) continue;
     let row;
@@ -114,8 +116,11 @@ export async function readAsideHistory(accountRoot, sid) {
       const role = part?.type === "thinking" && row.role === "assistant" ? "reasoning" : part?.type === "text" ? row.role : null;
       let value = role === "reasoning" ? part.thinking : part?.text;
       if (!role || typeof value !== "string" || !value) return;
-      if (role === "user") for (const reminder of reminders) {
-        if (value.endsWith(reminder)) value = value.slice(0, -reminder.length);
+      if (role === "user") {
+        value = value.replace(/\n\n\[Aside permission settings: mode=(?:read-only|guard|full-access); Final confirm=(?:Ask first|Skip confirmation)\. [^\]]*\]$/, "");
+        for (const reminder of reminders) {
+          if (value.endsWith(reminder)) value = value.slice(0, -reminder.length);
+        }
       }
       const id = `aside:${sid}:${row.role}:${rowId}:${index}`;
       items.set(id, { id, role, text: value });

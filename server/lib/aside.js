@@ -33,10 +33,14 @@ export function loadConfig() {
     style: file.style || "formal",
     grant_full_access: file.grant_full_access !== false,
     default_permission: file.default_permission ?? (file.grant_full_access !== false ? "full-access" : "guard"),
+    default_confirmation: file.default_confirmation ?? "ask-first",
     approved_models: file.approved_models ?? null,
   };
   if (!isPermissionMode(config.default_permission)) {
     throw new Error(`Invalid Aside default_permission: ${config.default_permission}`);
+  }
+  if (!["ask-first", "skip-confirmation"].includes(config.default_confirmation)) {
+    throw new Error(`Invalid Aside default_confirmation: ${config.default_confirmation}`);
   }
   return config;
 }

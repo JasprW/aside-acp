@@ -4,7 +4,7 @@
 
 Unofficial community integration. Not affiliated with or endorsed by Aside.
 
-Use [Aside](https://aside.com)'s browser agent from [Paseo](https://paseo.sh). Select **Aside** when creating an agent, choose a model, thinking effort and permission mode, then send browser tasks from desktop or mobile.
+Use [Aside](https://aside.com)'s browser agent from [Paseo](https://paseo.sh). Select **Aside** when creating an agent, choose a model, thinking effort, permission mode and Final confirm, then send browser tasks from desktop or mobile.
 
 The same project also provides an ACP server over stdio for other ACP clients.
 
@@ -20,6 +20,7 @@ Use only one Aside provider installation at a time. This repository retains its 
 
 - Paseo 0.11.2, with trusted plugins enabled.
 - Aside running and signed in on the daemon machine, with its CLI installed.
+- Aside local daemon 1.26.1011.1437 or newer with native suspension IDs and the CLI authentication helper.
 - Aside CLI 1.26.1010.1739 or newer. This bridge uses `session resume`, `session stop`, and session model updates.
 - Node.js 20 or newer for the standalone server and development tools.
 
@@ -76,6 +77,7 @@ Copy `aside-acp.example.json` to `~/.aside-acp.json` if you need to customize th
 | `exec_timeout_seconds` | Maximum time per turn, default 1200 seconds |
 | `style` | Bridge persona, `formal` or `casual` |
 | `owner_name` | Name used in the bridge persona |
+| `default_confirmation` | New-chat Final confirm: `ask-first` (default) or `skip-confirmation`; Read only always disables it |
 | `default_permission` | Initial mode for new chats: `read-only`, `guard` or `full-access` |
 | `grant_full_access` | Legacy fallback when `default_permission` is absent: `true` means Full access, `false` means Guard; defaults to `true` |
 
@@ -93,25 +95,44 @@ Paseo provider API → official runAcpProvider shim → ACP object streams
                              aside exec / session resume → Aside browser
 ```
 
-The plugin bundles the bridge, so no project-specific Node path or separately installed `aside-acp` executable is needed. The official Paseo ACP shim handles model controls, approval UI and timeline conversion.
+The plugin bundles the bridge, so no project-specific Node path or separately installed `aside-acp` executable is needed. The official Paseo ACP shim handles model controls and timeline conversion; the native permission wrapper relays Aside suspensions into Paseo approval UI.
 
 The bridge creates Aside sessions lazily on the first prompt, tails Aside CLI’s live `--log-dump` events for text and thinking deltas, and stores session mappings plus replayable conversation text in `~/.aside-acp/sessions`. Reloading an agent resumes the same Aside session. Model and thinking changes are applied to that session through Aside's session API.
 
-Approvals use the existing `[[APPROVAL]]` convention and appear as Paseo permission requests. `[[QUESTION]]` requests become forms when the ACP client supports elicitation; otherwise they remain text questions. Cancellation terminates the CLI turn, whose SIGTERM handler cancels the native Aside task.
+The provider relays Aside native approval and action-confirmation requests into Paseo permission UI. The standalone stdio ACP server exposes settings and legacy approvals; native suspension buttons require the Paseo wrapper or Aside desktop UI. `[[QUESTION]]` requests become forms when the ACP client supports elicitation; otherwise they remain text questions. Cancellation terminates the CLI turn, whose SIGTERM handler cancels the native Aside task.
 
-## Permission modes
+## Permission modes and Final confirm
 
-Paseo’s mode selector exposes Aside’s native **Read only**, **Guard** and **Full access** modes, with the same descriptions as Aside’s desktop selector. Changing a mode updates the original session through `aside.sessions.update({ permissionMode })`, including its runtime permission config. The bridge reads back the committed mode before reporting success. Failed changes report an error and keep the previous selection.
+The two controls are independent. The mode controls Aside's file/tool access policy; **Final confirm** controls confirmation before externally visible, destructive or paid actions such as sending, paying, deleting and submitting.
 
-Imports and reconnects read the native session’s permission mode. Older Paseo agents with the placeholder `Auto` retain that native mode. Explicit mode selections in Paseo are applied normally. The selected mode is checked against native state before each task. Changes made in Aside are read on reconnect; the plugin does not continuously subscribe to Aside’s desktop selector.
+| Mode | Native access policy | Final confirm |
+| --- | --- | --- |
+| Read only | Work within this task's folder; no access to other folders | Disabled, matching Aside |
+| Guard | Task folder, Documents and Downloads; ask before accessing other folders | Switching into Guard defaults to Ask first; can then select Skip confirmation |
+| Full access | Read and write anywhere on this computer | Ask first or Skip confirmation; switching into this mode preserves the current choice |
 
-For new chats, `default_permission` takes precedence over legacy `grant_full_access`. Existing defaults remain compatible. Aside CLI cannot create Read only chats directly: the bridge initializes with Guard using an acknowledgement-only prompt, then applies Read only through the native API before sending the first user task. If this update fails, the task is not sent.
+Select **Ask first** or **Skip confirmation** under **Final confirm** in Paseo's session settings. Skip confirmation does not bypass Guard's access boundaries. Full access does not itself disable final-action confirmation. For new bridge chats, confirmation defaults to Ask first (except Read only); `default_confirmation: "skip-confirmation"` changes this default. Selecting the same mode again preserves an explicit confirmation choice.
 
-Aside’s own folder-access confirmations in Guard still use Aside’s confirmation UI. The bridge’s `[[APPROVAL]]` convention provides separate Paseo approvals for model-requested external actions; it does not replace native folder confirmations or override the selected mode.
+Both settings are committed through Aside's native session API, with a read-back before reporting success. Imports/reconnects restore native settings, and native choices are refreshed before each task. Failed setting changes report an error rather than silently escalating access. The bridge does not continuously mirror idle desktop selector changes. Older `Auto` modes preserve native permissions.
+
+The Paseo provider relays real Aside `approval` and `action-confirmation` suspensions into its standard permission UI:
+
+- File/tool access: Allow once, Reject, and Always allow this permission when supported. Forwarded subagent approvals offer no permanent grant.
+- Final action: Confirm or Cancel for the exact proposed action, including the original message and draft/artifact data for review. Screenshot artifacts are shown as metadata/path, not an embedded Aside screenshot viewer.
+- Decisions resolve the original native suspension, so the same paused tool continues. Native request IDs and the current scope are checked before replying. Expired requests, failures, cancellation and plugin teardown never imply approval.
+- Requests handled in Aside are withdrawn from Paseo. A pending request is discovered again on reconnect. Native authentication/polling errors appear as a session notice; approval is never synthesized to recover from an error.
+
+Aside enforces its native access restrictions. Final confirm uses Aside's own model instructions and confirmation tool; it is not an OS-level interception of every possible side effect. Old `[[APPROVAL]]` blocks remain a compatibility fallback only while Ask first is enabled. New prompts use the native confirmation tool, avoiding a second bridge prompt after choosing Skip confirmation.
+
+Aside CLI creates sessions with Final confirm off and does not support creating Read only directly. The bridge first creates an acknowledgement-only session with no requested actions, then applies both settings before the first user task. If configuration fails, that task is not sent.
+
+The bridge authenticates to the **local loopback Aside daemon** using the installed CLI's `aside-native.node` helper and Aside's existing OS-user key. Session tokens stay in memory; keys/tokens are not copied into config, mappings or diagnostics. Only the selected account and bound session are addressed. Updating confirmation alone preserves Aside's remembered permission grants. This integration uses inspected native daemon APIs and requires a daemon exposing suspension IDs (inspected in 1.26.1011.1437). Remote Aside daemons are unsupported.
+
+Native `ask-user-question` suspensions from imported chats still need an answer in Aside and produce a visible notice. New bridge tasks use `[[QUESTION]]` forms when the ACP client supports elicitation, or text questions otherwise.
 
 ## Limits and permissions
 
-- The legacy default remains Full access unless `default_permission` or `grant_full_access` selects another mode. Native permission restrictions are enforced by Aside. The additional model-requested external-action approval convention is prompt based.
+- The legacy default remains Full access unless `default_permission` or `grant_full_access` selects another mode. Native permissions and final-action confirmation are handled by Aside, with requests relayed to Paseo.
 - Upstream errors are reported once with their specific reason and request ID when supplied. Content-filter rejections are not automatically retried.
 - Assistant text streams while it is generated. Thinking streams into Paseo’s reasoning rows when the model exposes it. Browser tool calls are not individually rendered.
 - The bridge uses the CLI’s hidden `--log-dump` option, inspected in Aside CLI 1.26.1010.1739. It tails real events every 40 ms, deduplicates final snapshots, and falls back to completed transcripts for missing final text. Intermediate assistant commentary may appear before the final answer.

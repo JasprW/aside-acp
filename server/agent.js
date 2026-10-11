@@ -6,10 +6,9 @@
 //   - aside exec <prompt> runs each turn
 //   - raw CLI events supply text/thinking deltas; completed transcripts
 //     recover missing final output
-//   - native permission modes plus a soft [[APPROVAL]]/[[QUESTION]]
-//     protocol for remote approval and question UI
-//   - [[APPROVAL]] blocks are translated to ACP requestPermission so Paseo
-//     renders its native Approve/Deny UI mid-turn
+//   - native permission modes and Final confirm settings
+//   - the Paseo provider wrapper relays real Aside tool suspensions; legacy
+//     [[APPROVAL]] and [[QUESTION]] blocks remain readable on older chats
 
 import fs from "node:fs";
 import path from "node:path";
@@ -33,11 +32,13 @@ import {
 } from "./lib/aside.js";
 import { JsonlTail, AsideTurnStream } from "./lib/stream.js";
 import { providerErrorMessage } from "./lib/errors.js";
-import { isPermissionMode, buildPermissionState } from "./lib/permissions.js";
+import { isPermissionMode, buildPermissionState, defaultFinalConfirm, confirmationOption } from "./lib/permissions.js";
+import { getNativeClient } from "./lib/native.js";
 import { listAsideSessions, parseNativeSessionId, getAsideSession, readAsideHistory } from "./lib/sessions.js";
 import {
   buildBootstrapPrompt,
   buildReminder,
+  buildPermissionReminder,
   parseApproval,
   parseQuestion,
   approvalGrantedText,
@@ -57,7 +58,7 @@ import {
   EFFORT_LEVELS,
 } from "./lib/models.js";
 
-const VERSION = "0.3.1";
+const VERSION = "0.4.0";
 const APPROVAL_LOOP_LIMIT = 4;
 const QUESTION_LOOP_LIMIT = 3;
 const PERMISSION_TIMEOUT_MS = 15 * 60 * 1000;
@@ -88,6 +89,9 @@ export class AsideACP {
     };
     if (!isPermissionMode(this.config.default_permission)) {
       throw new Error(`Invalid Aside default_permission: ${this.config.default_permission}`);
+    }
+    if (this.config.default_confirmation != null && !["ask-first", "skip-confirmation"].includes(this.config.default_confirmation)) {
+      throw new Error(`Invalid Aside default_confirmation: ${this.config.default_confirmation}`);
     }
     this.cli = null;
     this.accountRoot = null;
@@ -178,6 +182,7 @@ export class AsideACP {
       model: this.config.default_model,
       effort: this.config.default_effort,
       permissionMode: this.config.default_permission,
+      finalConfirm: defaultFinalConfirm(this.config),
       primed: false,
       cwd: params.cwd,
       busy: false,
@@ -188,11 +193,7 @@ export class AsideACP {
       pendingPermission: null,
     });
     const st = this.sessions.get(sessionId);
-    const configOptions = buildConfigOptions(
-      this.models,
-      this.config.default_model,
-      this.config.default_effort,
-    );
+    const configOptions = this.sessionConfigOptions(st);
     return {
       sessionId,
       configOptions,
@@ -217,14 +218,22 @@ export class AsideACP {
       throw new RequestError(-32602, `Unknown Aside mode: ${params.modeId}`);
     }
     const change = (st.permissionChange ?? Promise.resolve()).catch(() => {}).then(async () => {
+      const current = await this.readSessionPermissions(st);
       if (params.modeId !== "auto") {
-        await this.applySessionPermission(st, params.modeId);
+        const finalConfirm = params.modeId === "read-only" ? false
+          : params.modeId === "guard" && current.permissionMode !== "guard" ? true : current.finalConfirm;
+        await this.applySessionPermission(st, params.modeId, finalConfirm);
         st.permissionMode = params.modeId;
+        st.finalConfirm = finalConfirm;
         this.persistSession(st);
+      } else {
+        st.permissionMode = current.permissionMode;
+        st.finalConfirm = current.finalConfirm;
       }
       await this.conn.sessionUpdate({ sessionId: st.sessionId, update: {
         sessionUpdate: "current_mode_update", currentModeId: st.permissionMode,
       }});
+      await this.emitConfigOption(st, "confirmation");
     });
     st.permissionChange = change;
     await change;
@@ -253,10 +262,28 @@ export class AsideACP {
       this.validateModel(value);
       st.model = value;
     } else if (id === "effort" && EFFORT_LEVELS.includes(value)) st.effort = value;
+    else if (id === "confirmation" && ["ask-first", "skip-confirmation"].includes(value)) {
+      const change = (st.permissionChange ?? Promise.resolve()).catch(() => {}).then(async () => {
+        const current = await this.readSessionPermissions(st);
+        if (current.permissionMode === "read-only" && value === "ask-first") {
+          throw new RequestError(-32602, "Aside disables Final confirm in Read only mode");
+        }
+        const finalConfirm = value === "ask-first";
+        await this.applySessionPermission(st, current.permissionMode, finalConfirm);
+        st.permissionMode = current.permissionMode;
+        st.finalConfirm = finalConfirm;
+        this.persistSession(st);
+        await this.conn.sessionUpdate({ sessionId: st.sessionId, update: { sessionUpdate: "current_mode_update", currentModeId: st.permissionMode } });
+        await this.emitConfigOption(st, id);
+      });
+      st.permissionChange = change;
+      await change;
+      return { configOptions: this.sessionConfigOptions(st) };
+    }
     else throw new RequestError(-32602, `Unknown Aside configuration: ${id}=${value}`);
     await this.emitConfigOption(st, id);
     this.persistSession(st);
-    return { configOptions: buildConfigOptions(this.models, st.model, st.effort) };
+    return { configOptions: this.sessionConfigOptions(st) };
   }
 
   validateModel(value) {
@@ -274,16 +301,20 @@ export class AsideACP {
 
   persistSession(st) {
     if (!st.asideSid) return; // nothing durable to restore yet
+    let temporary;
     try {
       fs.mkdirSync(this.sessionsRoot, { recursive: true, mode: 0o700 });
+      const file = this.sessionFile(st.sessionId);
+      temporary = `${file}.${randomUUID()}.tmp`;
       fs.writeFileSync(
-        this.sessionFile(st.sessionId),
+        temporary,
         JSON.stringify({
           sessionId: st.sessionId,
           asideSid: st.asideSid,
           model: st.model,
           effort: st.effort,
           permissionMode: st.permissionMode,
+          finalConfirm: st.finalConfirm,
           primed: !!st.asideSid,
           history: st.history || [],
           account: this.config.account,
@@ -291,8 +322,11 @@ export class AsideACP {
         }),
         { mode: 0o600 },
       );
+      fs.renameSync(temporary, file);
     } catch (e) {
       log(`persist session failed: ${e.message}`);
+    } finally {
+      if (temporary) try { fs.unlinkSync(temporary); } catch { /* already renamed */ }
     }
   }
 
@@ -307,6 +341,7 @@ export class AsideACP {
         model: this.config.default_model,
         effort: this.config.default_effort,
         permissionMode: this.config.default_permission,
+        finalConfirm: defaultFinalConfirm(this.config),
         primed: false,
         busy: false,
         queue: [],
@@ -328,6 +363,7 @@ export class AsideACP {
           st.model = saved.model ?? st.model;
           st.effort = saved.effort ?? st.effort;
           if (isPermissionMode(saved.permissionMode)) st.permissionMode = saved.permissionMode;
+          if (typeof saved.finalConfirm === "boolean") st.finalConfirm = saved.finalConfirm;
           st.primed = true;
           st.history = Array.isArray(saved.history) ? saved.history : [];
           st.cwd = saved.cwd ?? params.cwd;
@@ -354,6 +390,7 @@ export class AsideACP {
         const native = await getAsideSession(this.accountRoot, st.asideSid);
         if (!isPermissionMode(native.permissionMode)) throw new Error(`Unknown native Aside permission mode: ${native.permissionMode}`);
         st.permissionMode = native.permissionMode;
+        st.finalConfirm = native.finalConfirm;
         this.persistSession(st);
       }
       this.sessions.set(sessionId, st);
@@ -365,7 +402,7 @@ export class AsideACP {
         content: { type: "text", text: item.text },
       }});
     }
-    const configOptions = buildConfigOptions(this.models, st.model, st.effort);
+    const configOptions = this.sessionConfigOptions(st);
     return {
       configOptions,
       modes: buildPermissionState(st.permissionMode),
@@ -376,7 +413,7 @@ export class AsideACP {
   }
 
   async emitConfigOption(st, optionId) {
-    const opts = buildConfigOptions(this.models, st.model, st.effort);
+    const opts = this.sessionConfigOptions(st);
     const option = opts.find((o) => o.id === optionId) || opts[0];
     if (!option) return;
     try {
@@ -390,6 +427,10 @@ export class AsideACP {
     } catch {
       /* client gone */
     }
+  }
+
+  sessionConfigOptions(st) {
+    return [...buildConfigOptions(this.models, st.model, st.effort), confirmationOption(st)];
   }
 
   async prompt(params) {
@@ -495,7 +536,7 @@ export class AsideACP {
       }
 
       const approval = parseApproval(result.finalText);
-      if (approval) {
+      if (approval && st.finalConfirm) {
         if (approvals >= APPROVAL_LOOP_LIMIT) {
           log(`approval loop limit reached; leaving approval as text`);
           break;
@@ -587,7 +628,9 @@ export class AsideACP {
     this.persistSession(st); // Retain the binding even if permission setup fails.
     // CLI creation supports Guard and Full access, but not Read only.
     // Apply Read only through the native API before admitting the first task.
-    await this.applySessionPermission(st, st.permissionMode);
+    const change = (st.permissionChange ?? Promise.resolve()).catch(() => {}).then(() => this.applySessionPermission(st, st.permissionMode));
+    st.permissionChange = change;
+    await change;
     log(`bound acp session ${st.sessionId} -> aside session ${sid}`);
     this.persistSession(st);
     return true;
@@ -606,21 +649,25 @@ export class AsideACP {
     return args;
   }
 
-  async applySessionPermission(st, permissionMode) {
+  async applySessionPermission(st, permissionMode, finalConfirm = st.finalConfirm) {
     if (!st.asideSid) return; // Applied at native session creation.
-    const native = await getAsideSession(this.accountRoot, st.asideSid);
-    if (native.permissionMode === permissionMode) return;
-    const args = ["repl", "--host", "local"];
-    if (this.config.account != null) args.push("--account", String(this.config.account));
-    args.push(`await aside.sessions.update(${JSON.stringify(st.asideSid)}, { permissionMode: ${JSON.stringify(permissionMode)} }); console.log("ASIDE_ACP_PERMISSION_UPDATED");`);
-    const result = await execAsync(this.cli, args, { timeoutMs: 30000, log });
-    if (result.timedOut || result.code !== 0 || !result.stdout.includes("ASIDE_ACP_PERMISSION_UPDATED")) {
-      throw new Error(`Aside permission update failed: ${result.stderr || result.stdout || "No confirmation from Aside"}`);
+    const client = getNativeClient(this.config);
+    const native = await client.getSession(this.config.account, st.asideSid);
+    if (native.permissionMode === permissionMode && (native.runtimeConfig.finalConfirm === true) === finalConfirm) return;
+    // Re-sending an unchanged mode would reset Aside's remembered grants.
+    await client.updatePermissions(this.config.account, st.asideSid, native.permissionMode === permissionMode ? undefined : permissionMode, finalConfirm);
+    const committed = await client.getSession(this.config.account, st.asideSid);
+    if (committed.permissionMode !== permissionMode || (committed.runtimeConfig.finalConfirm === true) !== finalConfirm) {
+      throw new Error("Aside did not commit the selected permission and confirmation settings");
     }
-    const committed = await getAsideSession(this.accountRoot, st.asideSid);
-    if (committed.permissionMode !== permissionMode) {
-      throw new Error(`Aside did not commit permission mode ${permissionMode}`);
-    }
+  }
+
+  async readSessionPermissions(st) {
+    if (!st.asideSid) return { permissionMode: st.permissionMode, finalConfirm: st.finalConfirm };
+    const native = await getNativeClient(this.config).getSession(this.config.account, st.asideSid);
+    if (!isPermissionMode(native.permissionMode)) throw new Error(`Unknown native Aside permission mode: ${native.permissionMode}`);
+    return { permissionMode: native.permissionMode,
+      finalConfirm: native.permissionMode !== "read-only" && native.runtimeConfig.finalConfirm === true };
   }
 
   async applySessionModel(st) {
@@ -637,7 +684,7 @@ export class AsideACP {
     };
     const args = ["repl", "--host", "local"];
     if (this.config.account != null) args.push("--account", String(this.config.account));
-    args.push(`aside.sessions.update(${JSON.stringify(st.asideSid)}, { model: ${JSON.stringify(model)} }); console.log("ASIDE_ACP_MODEL_UPDATED");`);
+    args.push(`await aside.sessions.update(${JSON.stringify(st.asideSid)}, { model: ${JSON.stringify(model)} }); console.log("ASIDE_ACP_MODEL_UPDATED");`);
     const result = await execAsync(this.cli, args, { timeoutMs: 30000, log });
     if (result.code !== 0 || !result.stdout.includes("ASIDE_ACP_MODEL_UPDATED")) {
       throw new Error(`Aside model update failed: ${result.stderr || result.stdout}`);
@@ -739,7 +786,17 @@ export class AsideACP {
     // Wait for the user's pending permission selection before starting work.
     await st.permissionChange?.catch(() => {});
     await this.applySessionModel(st);
-    await this.applySessionPermission(st, st.permissionMode);
+    // Read live choices, including changes made in Aside, before each task.
+    // Explicit setters already commit their selections atomically above.
+    const native = await this.readSessionPermissions(st);
+    const finalConfirm = native.finalConfirm;
+    if (st.permissionMode !== native.permissionMode || st.finalConfirm !== finalConfirm) {
+      st.permissionMode = native.permissionMode;
+      st.finalConfirm = finalConfirm;
+      this.persistSession(st);
+      await this.conn.sessionUpdate({ sessionId: st.sessionId, update: { sessionUpdate: "current_mode_update", currentModeId: st.permissionMode } });
+      await this.emitConfigOption(st, "confirmation");
+    }
     if (st.cancelRequested || this.disposing) return { stopReason: "cancelled", finalText: "" };
     const reader = new TranscriptReader(this.accountRoot, sid, log);
     reader.open();
@@ -759,6 +816,7 @@ export class AsideACP {
     }, log);
     const args = this.buildExecArgs(sid, st);
     args.unshift("--log-dump", eventFile);
+    promptText += buildPermissionReminder(st.permissionMode, st.finalConfirm);
     args.push(promptText);
     log(`turn exec (${st.sessionId}) ${stripAnsi(promptText).slice(0, 120)}...`);
 

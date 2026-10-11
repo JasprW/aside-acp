@@ -1,5 +1,13 @@
 # Verification
 
+## 0.4.0 native permissions and Final confirm
+
+Static type/syntax/diff checks and plugin installation status only. No automated tests, model turns, native permission mutations or approval UI exercises were run for this update. Existing config-option count expectation was updated for the additional setting. Prior verification results below apply to their stated versions, not this new native relay.
+
+Contracts were inspected from Aside CLI 1.26.1010.1739, daemon 1.26.1011.1437, current desktop selector code and Paseo 0.11.2. Native mode defaults, CLI's forced `finalConfirm: false`, authenticated local tRPC, persisted suspensions and ID-checked reply schemas were read directly from the installed runtime. Runtime helpers use those contracts; actual authentication, native mutations and UI behavior remain for manual testing.
+
+Manual checks: change each mode and Final confirm choice; import/reconnect a chat; trigger a Guard folder-access request and allow/reject it; review a simulated final-action confirmation and cancel it without taking an external action; answer in Aside and confirm the Paseo buttons disappear; interrupt/reload with a pending request; verify Skip confirmation retains Guard access checks. No successful live approval is claimed by the static checks.
+
 ## 0.3.1 native permission modes
 
 Static type/syntax checks only. Aside CLI help, built-in Aside skill, desktop permission schemas/templates and the local session index were inspected read-only. No automated tests, permission mutations, model turns or visual UI checks were run for this update. Mode switching, Read only initialization and native confirmation UI remain for manual testing.

@@ -8,5 +8,6 @@
   "exec_timeout_seconds": 1200,
   "style": "formal",
   "approved_models": null,
-  "default_permission": "full-access"
+  "default_permission": "full-access",
+  "default_confirmation": "ask-first"
 }

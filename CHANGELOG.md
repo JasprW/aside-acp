@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Reduce provider SVG padding and center the Aside mark, increasing its visible size by 25% to match neighboring provider icons.
+
 ## 0.3.1
 
 - Expose native Read only, Guard and Full access in Paseo’s mode selector.

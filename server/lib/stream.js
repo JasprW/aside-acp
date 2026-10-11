@@ -1,5 +1,39 @@
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import { parseQuestions } from "./persona.js";
+
+/** Keep protocol JSON out of the chat while exposing complete streamed forms. */
+export class QuestionBlockFilter {
+  constructor(onQuestion) { this.buffer = ""; this.onQuestion = onQuestion; }
+  push(text, final = false) {
+    this.buffer += text;
+    const open = "[[QUESTION]]", close = "[[/QUESTION]]";
+    let output = "";
+    for (;;) {
+      const start = this.buffer.indexOf(open);
+      if (start >= 0) {
+        output += this.buffer.slice(0, start);
+        this.buffer = this.buffer.slice(start);
+        const end = this.buffer.indexOf(close, open.length);
+        if (end < 0) {
+          if (final || this.buffer.length > 65536) { output += this.buffer; this.buffer = ""; }
+          break;
+        }
+        const block = this.buffer.slice(0, end + close.length);
+        const questions = parseQuestions(block);
+        if (questions) this.onQuestion(questions); else output += block;
+        this.buffer = this.buffer.slice(block.length);
+        continue;
+      }
+      let held = 0;
+      if (!final) for (let length = 1; length < open.length; length++) if (this.buffer.endsWith(open.slice(0, length))) held = length;
+      output += this.buffer.slice(0, this.buffer.length - held);
+      this.buffer = held ? this.buffer.slice(-held) : "";
+      break;
+    }
+    return output;
+  }
+}
 
 /** Tail complete JSONL records without dropping partial UTF-8 characters/lines. */
 export class JsonlTail {

@@ -1,6 +1,6 @@
 {
   "name": "aside-acp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Unofficial Aside browser agent integration for Paseo, with streaming and native session import.",
   "type": "module",
   "main": "server.js",

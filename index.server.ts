@@ -15,6 +15,6 @@ export default function contribute(server: PluginServerContext) {
     icon: "icon.svg",
     connector: aside.connect,
     transformers: [legacyAsideMode],
-  })))));
+  }))), aside.questions));
   return aside.dispose;
 }

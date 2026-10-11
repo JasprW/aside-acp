@@ -148,6 +148,16 @@ class NativeClient {
     return this.call("sessions.get", { accountId, sessionId });
   }
 
+  messageRows(accountId, sessionId) {
+    return this.call("sessions.messageRows", { accountId, sessionId });
+  }
+
+  async branchSession(accountId, sessionId, messageId) {
+    const result = await this.call("sessions.branch", { accountId, sessionId, messageId }, true);
+    if (!result?.session?.id) throw new Error("Invalid Aside branch response");
+    return result.session;
+  }
+
   updatePermissions(accountId, sessionId, permissionMode, finalConfirm) {
     return this.call("sessions.update", { accountId, sessionId,
       ...(permissionMode ? { permissionMode } : {}), runtimeConfig: { finalConfirm } }, true);
@@ -175,6 +185,11 @@ export function getNativeClient(config) {
   const key = `${origin}\0${cli}`;
   if (!clients.has(key)) clients.set(key, new NativeClient(origin, cli));
   return clients.get(key);
+}
+
+export function isHeadlessSession(session) {
+  return session?.trigger?.type === "user" &&
+    (session.trigger.source === "cli" || session.trigger.client === "cli");
 }
 
 export function activeSuspension(session) {

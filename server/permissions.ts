@@ -5,9 +5,11 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ProviderEvent, ProviderPermissionRequest, ProviderRegistration } from "@getpaseo/plugin/server/provider";
 import { detectAccountRoot, loadConfig } from "./lib/aside.js";
 import { activeSuspension, getNativeClient, suspensionKey, type NativeSuspension } from "./lib/native.js";
-import { questionRequest, questionResponse } from "./questions.js";
+import { questionRequest, questionResponse, type AsideQuestionRelay, type BridgeQuestion } from "./questions.js";
+export { createAsideQuestionRelay } from "./questions.js";
 
 const PREFIX = "aside-native:";
+const QUESTION_PREFIX = "aside-question:";
 const POLL_MS = 600;
 type JsonValue = NonNullable<ProviderPermissionRequest["input"]>[string];
 
@@ -39,7 +41,7 @@ function permissionRequest(suspension: NativeSuspension): ProviderPermissionRequ
 }
 
 /** Relay real Aside approvals and questions through Paseo's standard UI. */
-export function withAsidePermissions(provider: ProviderRegistration): ProviderRegistration {
+export function withAsidePermissions(provider: ProviderRegistration, questions?: AsideQuestionRelay): ProviderRegistration {
   return {
     ...provider,
     async connect(request) {
@@ -58,6 +60,27 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
         ignored: Set<string>;
       };
       const watches = new Map<string, Watch>();
+      const forms = new Map<string, { sessionId: string; suspension: NativeSuspension; question: BridgeQuestion }>();
+      const unsubscribeQuestions = questions?.observe((question) => {
+        const match = [...watches].find(([, watch]) => watch.acpId === question.sessionId && watch.ready && !watch.stopped && !watch.paused);
+        if (!match || closed) return false;
+        const [sessionId] = match;
+        const id = QUESTION_PREFIX + question.id;
+        const suspension: NativeSuspension = { id: question.id, kind: "ask-user-question", toolCallId: question.id,
+          createdAt: new Date().toISOString(), request: { questions: question.questions } };
+        const request = questionRequest(id, suspension);
+        forms.set(id, { sessionId, suspension, question });
+        void question.done.then(() => {
+          if (!forms.delete(id)) return;
+          emit({ type: "session.permission_resolved", sessionId, permissionId: id });
+        });
+        emit({ type: "session.permission", sessionId, request });
+        return true;
+      });
+
+      function cancelForms(sessionId: string) {
+        for (const form of forms.values()) if (form.sessionId === sessionId) form.question.cancel(new Error("Aside question was canceled"));
+      }
 
       function withdraw(sessionId: string, watch: Watch) {
         if (!watch.pending) return;
@@ -75,6 +98,7 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
       }
 
       function stop(sessionId: string, watch: Watch) {
+        cancelForms(sessionId);
         watch.stopped = true;
         clearTimeout(watch.timer);
         withdraw(sessionId, watch);
@@ -91,14 +115,18 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
         if (closed || watch.stopped || watch.paused || watch.polling || watch.answering) return;
         watch.polling = true;
         try {
-          if (!watch.nativeId) {
+          {
             const file = path.join(os.homedir(), ".aside-acp", "sessions", `${watch.acpId}.json`);
             let saved;
             try { saved = JSON.parse(await fs.readFile(file, "utf8")); }
             catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
             if (Number(saved.account) !== account) throw new Error("The saved Aside session belongs to another account");
             if (typeof saved.asideSid !== "string" || !/^[a-zA-Z0-9_-]+$/.test(saved.asideSid)) throw new Error("Invalid saved Aside session binding");
-            watch.nativeId = saved.asideSid;
+            if (watch.nativeId !== saved.asideSid) {
+              withdraw(sessionId, watch);
+              watch.ignored.clear();
+              watch.nativeId = saved.asideSid;
+            }
           }
           const native = await client.getSession(account, watch.nativeId!);
           if (closed || watch.stopped || watch.paused || watch.answering) return;
@@ -135,6 +163,7 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
         if (event.type === "session.ready" && watch) { watch.ready = true; schedule(event.sessionId, watch, 0); }
         if (event.type === "session.closed" && watch) { stop(event.sessionId, watch); watches.delete(event.sessionId); }
         if (event.type === "session.turn" && watch && ["canceled", "failed"].includes(event.state)) {
+          cancelForms(event.sessionId);
           if (watch.pending) watch.ignored.add(watch.pending.key);
           withdraw(event.sessionId, watch);
         }
@@ -146,6 +175,17 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
         async send(input) {
           if (closed) throw new Error("Aside permission connection is closed");
           const watch = "sessionId" in input ? watches.get(input.sessionId) : undefined;
+          if (input.type === "session.permission" && input.permissionId.startsWith(QUESTION_PREFIX)) {
+            const form = forms.get(input.permissionId);
+            if (!form || form.sessionId !== input.sessionId || !watch || watch.stopped || watch.paused) throw new Error("This Aside question has expired");
+            const answer = input.response.behavior === "allow" ? questionResponse(form.suspension, input.response) : null;
+            form.question.answer(answer);
+            if (input.response.behavior === "deny" && input.response.interrupt) {
+              watch.paused = true;
+              await connection.send({ type: "session.interrupt", requestId: randomUUID(), sessionId: input.sessionId });
+            }
+            return;
+          }
           if (input.type === "session.permission" && input.permissionId.startsWith(PREFIX)) {
             const pending = watch?.pending;
             if (!watch || !pending || pending.request.id !== input.permissionId || !watch.nativeId || watch.paused || watch.stopped) {
@@ -194,6 +234,7 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
             return;
           }
           if ((input.type === "session.close" || input.type === "session.interrupt") && watch) {
+            cancelForms(input.sessionId);
             if (watch.pending) watch.ignored.add(watch.pending.key);
             watch.paused = true;
             clearTimeout(watch.timer);
@@ -207,6 +248,7 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
           for (const [sessionId, watch] of watches) stop(sessionId, watch);
           closed = true;
           unsubscribe();
+          unsubscribeQuestions?.();
           watches.clear();
           listeners.clear();
           await connection.close();

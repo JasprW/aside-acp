@@ -18,12 +18,16 @@ const QUESTION_PROTOCOL =
   "\nThe owner will answer through the remote client.";
 
 const NATIVE_QUESTION_PROTOCOL =
-  "This client relays the native ask_user_question tool as an interactive question form. " +
-  "When you need the owner's choice or missing information, call ask_user_question with " +
-  "concise options and wait for its actual response. Multiple questions and custom text " +
-  "answers are supported. Use unique short headers for each question. Do not output " +
-  "[[QUESTION]] blocks or tell the owner to answer in Aside. A dismissed question is not " +
-  "a choice or an approval; follow the user's cancellation and do not infer an answer.";
+  "The Paseo bridge provides interactive question forms, even in CLI sessions that do not " +
+  "expose ask_user_question. If that tool is actually available, you may use it. Otherwise, " +
+  "to ask the owner for a choice, clarification or an explicitly requested question demo, " +
+  "emit a [[QUESTION]] block using this format, then end the turn and wait:\n" + QUESTION_FORMAT +
+  "\nThe bridge renders this block as a real form while it streams; the owner can select " +
+  "options or type a custom answer. For multiple choice add multiple:true to the question. " +
+  "Use unique short headers. This bridge protocol replaces earlier instructions forbidding " +
+  "[[QUESTION]] blocks. Do not say that the missing native tool prevents an interactive form. " +
+  "Continue only after the bridge supplies the owner's actual answer. A declined question " +
+  "does not supply an answer or authorize an action.";
 
 const NATIVE_APPROVAL_PROTOCOL =
   "This bridge relays native Aside file/tool permissions and request_action_confirmation " +
@@ -71,6 +75,26 @@ export function buildPermissionReminder(permissionMode, finalConfirm) {
 
 const APPROVAL_RE = /\[\[APPROVAL\]\]([\s\S]*?)\[\[\/APPROVAL\]\]/i;
 const QUESTION_RE = /\[\[QUESTION\]\]([\s\S]*?)\[\[\/QUESTION\]\]/i;
+
+export function parseQuestions(text) {
+  const match = QUESTION_RE.exec(text || "");
+  if (!match) return null;
+  try {
+    const raw = JSON.parse(match[1]).questions;
+    if (!Array.isArray(raw) || !raw.length) return null;
+    const questions = raw.map((q, index) => {
+      if (!q || typeof q.question !== "string" || !Array.isArray(q.options ?? [])) throw new Error("Invalid question");
+      const options = (q.options ?? []).map((option) => {
+        if (typeof option === "string") return { label: option, description: "" };
+        if (!option || typeof option.label !== "string") throw new Error("Invalid option");
+        return { label: option.label, description: typeof option.description === "string" ? option.description : "" };
+      });
+      return { header: typeof q.header === "string" ? q.header : `Question ${index + 1}`,
+        question: q.question, options, multiple: q.multiple === true || q.multiSelect === true };
+    });
+    return questions;
+  } catch { return null; }
+}
 
 export function parseApproval(text) {
   const m = APPROVAL_RE.exec(text || "");

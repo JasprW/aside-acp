@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 (2026-10-11)
+
+- Fix headless Guard requests being denied before an approval exists. Use Aside's supported branch API before the next task, preserving history, concrete permissions, model, browser binding and the source chat.
+- Follow changed native session bindings in the permission watcher; restore migrated imports from their persisted mapping.
+- Correct the assumption that CLI sessions expose `ask_user_question`: Aside intentionally omits it in headless sessions.
+- Restore structured questions as a fallback and render complete question blocks during streaming through Paseo's existing form.
+- Hold continuation until a real answer, then resume the original chat; withdraw forms on cancellation and connection teardown.
+- Keep native question handling for sessions that actually expose the native tool.
+
 ## 0.5.0
 
 - Relay native Aside questions into Paseo's existing question form as soon as the session pauses, without waiting for a final assistant reply.

@@ -30,10 +30,10 @@ import {
   TranscriptReader,
   stripAnsi,
 } from "./lib/aside.js";
-import { JsonlTail, AsideTurnStream } from "./lib/stream.js";
+import { JsonlTail, AsideTurnStream, QuestionBlockFilter } from "./lib/stream.js";
 import { providerErrorMessage } from "./lib/errors.js";
 import { isPermissionMode, buildPermissionState, defaultFinalConfirm, confirmationOption } from "./lib/permissions.js";
-import { getNativeClient } from "./lib/native.js";
+import { getNativeClient, isHeadlessSession } from "./lib/native.js";
 import { listAsideSessions, parseNativeSessionId, getAsideSession, readAsideHistory } from "./lib/sessions.js";
 import {
   buildBootstrapPrompt,
@@ -41,6 +41,7 @@ import {
   buildPermissionReminder,
   parseApproval,
   parseQuestion,
+  parseQuestions,
   approvalGrantedText,
   approvalDeniedText,
   BOOTSTRAP_MARKER,
@@ -58,7 +59,7 @@ import {
   EFFORT_LEVELS,
 } from "./lib/models.js";
 
-const VERSION = "0.5.0";
+const VERSION = "0.5.1";
 const APPROVAL_LOOP_LIMIT = 4;
 const QUESTION_LOOP_LIMIT = 3;
 const PERMISSION_TIMEOUT_MS = 15 * 60 * 1000;
@@ -299,7 +300,7 @@ export class AsideACP {
     return path.join(this.sessionsRoot, `${sessionId}.json`);
   }
 
-  persistSession(st) {
+  persistSession(st, required = false) {
     if (!st.asideSid) return; // nothing durable to restore yet
     let temporary;
     try {
@@ -325,6 +326,7 @@ export class AsideACP {
       fs.renameSync(temporary, file);
     } catch (e) {
       log(`persist session failed: ${e.message}`);
+      if (required) throw e;
     } finally {
       if (temporary) try { fs.unlinkSync(temporary); } catch { /* already renamed */ }
     }
@@ -374,7 +376,7 @@ export class AsideACP {
         /* never bootstrapped on this host — behave like a fresh session */
       }
       const nativeSid = parseNativeSessionId(sessionId, this.accountRoot);
-      if (nativeSid) {
+      if (nativeSid && !st.asideSid) {
         const native = await getAsideSession(this.accountRoot, nativeSid);
         st.asideSid = nativeSid;
         st.primed = true;
@@ -488,13 +490,23 @@ export class AsideACP {
       pe.resolve();
       st.pendingElicitation = null;
     }
+    st.bridgeQuestion?.controller.abort();
     log(`cancel requested for session ${st.sessionId} (ghost=${!!st.ghostExec})`);
   }
 
   // --- turn machinery --------------------------------------------------------
 
-  runTurn(st, promptText, params) {
-    return this.runTurnInner(st, promptText, params);
+  async runTurn(st, promptText, params) {
+    try { return await this.runTurnInner(st, promptText, params); }
+    finally { st.bridgeQuestion?.controller.abort(); st.bridgeQuestion = null; }
+  }
+
+  beginBridgeQuestion(st, questions) {
+    if (st.bridgeQuestion || st.cancelRequested || !this.config.request_question) return;
+    const controller = new AbortController();
+    const result = this.config.request_question(st.sessionId, questions, controller.signal)
+      .then((answer) => ({ answer }), (error) => ({ error }));
+    st.bridgeQuestion = { controller, result };
   }
 
   async runTurnInner(st, promptText, params) {
@@ -505,8 +517,6 @@ export class AsideACP {
       st.primed = true;
       this.persistSession(st);
     }
-    const sid = st.asideSid;
-
     let approvals = 0;
     let questionLoops = 0;
     let stopReason = "end_turn";
@@ -517,7 +527,7 @@ export class AsideACP {
         stopReason = "cancelled";
         break;
       }
-      const result = await this.runAsideTurn(st, sid, inject);
+      const result = await this.runAsideTurn(st, st.asideSid, inject);
       stopReason = result.stopReason;
       if (stopReason === "error") throw new Error(result.error || "Aside turn failed");
       if (stopReason !== "end_turn") break;
@@ -555,6 +565,19 @@ export class AsideACP {
             ? approvalGrantedText(approval.action)
             : approvalDeniedText(approval.action);
         // loop → run the continuation turn
+        continue;
+      }
+
+      const bridgeQuestions = this.config.request_question ? parseQuestions(result.finalText) : null;
+      if (bridgeQuestions || st.bridgeQuestion) {
+        if (!st.bridgeQuestion) this.beginBridgeQuestion(st, bridgeQuestions);
+        const outcome = await st.bridgeQuestion.result;
+        st.bridgeQuestion = null;
+        if (st.cancelRequested) { stopReason = "cancelled"; break; }
+        if (outcome.error) throw outcome.error;
+        inject = outcome.answer
+          ? `[QUESTION ANSWERED by the owner]\n${outcome.answer.answers.map((answer) => `${answer.header}: ${answer.answer}`).join("\n")}\nContinue the same task using the owner's answers.`
+          : declinedReplyText();
         continue;
       }
 
@@ -647,6 +670,35 @@ export class AsideACP {
       args.push("--permission", st.permissionMode === "full-access" ? "full-access" : "guard");
     }
     return args;
+  }
+
+  async ensureInteractiveSession(st) {
+    const client = getNativeClient(this.config);
+    const native = await client.getSession(this.config.account, st.asideSid);
+    if (!isHeadlessSession(native)) return;
+    // Aside denies Guard's "ask" in headless CLI sessions. Its supported
+    // branch API copies history and concrete grants to a user/branch session,
+    // where the original native hooks can suspend for a real user decision.
+    // Leave the source intact; never rewrite trigger metadata or widen access.
+    if (!["idle", "errored", "interrupted", "aborted"].includes(native.status)) {
+      throw new Error("Wait for the Aside task to stop before enabling interactive approvals");
+    }
+    const rows = await client.messageRows(this.config.account, st.asideSid);
+    const last = rows.findLastIndex((row) => row.role === "assistant");
+    if (last < 0 || rows.slice(last + 1).some((row) => ["user", "assistant", "toolResult"].includes(row.role))) {
+      throw new Error("Aside needs a completed assistant reply before preserving this chat in an interactive branch");
+    }
+    const originalId = st.asideSid;
+    const branch = await client.branchSession(this.config.account, originalId, rows[last].id);
+    if (isHeadlessSession(branch) || branch.id === originalId || branch.permissionMode !== native.permissionMode ||
+        JSON.stringify(branch.permission) !== JSON.stringify(native.permission) ||
+        (branch.runtimeConfig.finalConfirm === true) !== (native.runtimeConfig.finalConfirm === true)) {
+      throw new Error("Aside did not preserve permissions in the interactive branch; no task was sent");
+    }
+    st.asideSid = branch.id;
+    try { this.persistSession(st, true); }
+    catch (error) { st.asideSid = originalId; throw error; }
+    log(`interactive branch: ${originalId} -> ${branch.id} (acp ${st.sessionId}; source retained)`);
   }
 
   async applySessionPermission(st, permissionMode, finalConfirm = st.finalConfirm) {
@@ -785,6 +837,8 @@ export class AsideACP {
     }
     // Wait for the user's pending permission selection before starting work.
     await st.permissionChange?.catch(() => {});
+    await this.ensureInteractiveSession(st);
+    sid = st.asideSid;
     await this.applySessionModel(st);
     // Read live choices, including changes made in Aside, before each task.
     // Explicit setters already commit their selections atomically above.
@@ -808,11 +862,20 @@ export class AsideACP {
     const events = new JsonlTail(eventFile, log);
     const pending = new Set();
     let historyDirty = false;
-    const stream = new AsideTurnStream((text, role, messageId) => {
+    const filters = new Map();
+    const deliver = (text, role, messageId) => {
+      if (!text) return;
       historyDirty = true;
       const sent = this.emitChunk(st.sessionId, text, { role, messageId, persist: false });
       pending.add(sent);
       void sent.finally(() => pending.delete(sent));
+    };
+    const stream = new AsideTurnStream((text, role, messageId) => {
+      if (role === "assistant" && this.config.request_question) {
+        if (!filters.has(messageId)) filters.set(messageId, new QuestionBlockFilter((questions) => this.beginBridgeQuestion(st, questions)));
+        text = filters.get(messageId).push(text);
+      }
+      deliver(text, role, messageId);
     }, log);
     const args = this.buildExecArgs(sid, st);
     args.unshift("--log-dump", eventFile);
@@ -867,6 +930,7 @@ export class AsideACP {
         const rd = reader.read();
         for (const message of rd.messages) stream.complete(message);
         if (rd.errors.length) stream.error = rd.errors[rd.errors.length - 1];
+        for (const [messageId, filter] of filters) deliver(filter.push("", true), "assistant", messageId);
       }
       // Finish delivery before ACP prompt returns, bounded on disconnect.
       await Promise.allSettled([...pending]);
@@ -1056,7 +1120,7 @@ function extractPromptText(params) {
 
 /** Create the same ACP agent for stdio and Paseo's in-process connector. */
 export async function connectAsideAgent(stream, options = {}) {
-  const agent = new AsideACP(null, { ...loadConfig(), native_questions: options.nativeQuestions === true });
+  const agent = new AsideACP(null, { ...loadConfig(), native_questions: options.nativeQuestions === true, request_question: options.requestQuestion });
   await agent.init();
   const connection = new AgentSideConnection((conn) => {
     agent.conn = conn;

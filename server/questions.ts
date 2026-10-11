@@ -1,5 +1,48 @@
 import type { ProviderPermissionRequest, ProviderPermissionResponse } from "@getpaseo/plugin/server/provider";
 import type { NativeSuspension } from "./lib/native.js";
+import { randomUUID } from "node:crypto";
+
+export type QuestionAnswer = { answers: Array<{ header: string; answer: string }> };
+export interface BridgeQuestion {
+  id: string; sessionId: string; questions: unknown[]; done: Promise<void>;
+  answer(value: QuestionAnswer | null): void;
+  cancel(error: Error): void;
+}
+export interface AsideQuestionRelay {
+  request(sessionId: string, questions: unknown[], signal: AbortSignal): Promise<QuestionAnswer | null>;
+  observe(listener: (question: BridgeQuestion) => boolean): () => void;
+}
+
+/** A connection-local human-input channel for headless CLI sessions. */
+export function createAsideQuestionRelay(): AsideQuestionRelay {
+  const listeners = new Set<(question: BridgeQuestion) => boolean>();
+  return {
+    observe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    request(sessionId, questions, signal) {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        let markDone!: () => void;
+        const done = new Promise<void>((finish) => { markDone = finish; });
+        const finish = (value: QuestionAnswer | null, error?: Error) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener("abort", abort);
+          markDone();
+          if (error) reject(error); else resolve(value);
+        };
+        const abort = () => finish(null, new Error("Aside question was canceled"));
+        const question: BridgeQuestion = { id: randomUUID(), sessionId, questions, done,
+          answer: (value) => finish(value), cancel: (error) => finish(null, error) };
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) { abort(); return; }
+        try {
+          for (const listener of listeners) if (listener(question)) return;
+          finish(null, new Error("Paseo question form is not connected"));
+        } catch (error) { finish(null, error instanceof Error ? error : new Error(String(error))); }
+      });
+    },
+  };
+}
 
 function questions(suspension: NativeSuspension) {
   const raw: unknown = suspension.request.questions;

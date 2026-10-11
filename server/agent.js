@@ -1,11 +1,11 @@
 // aside-acp: wrap the Aside browser agent as an ACP (Agent Client Protocol)
 // server. Spawned by Paseo (or any ACP client) over stdio; each session maps
-// to a persistent aside session; turns stream from the aside transcript.
+// to a persistent aside session; turns stream from Aside's live CLI events.
 //
 // Design mirrors aside-telegram-bridge (SaiAmartya) where it is proven:
 //   - aside exec <prompt> runs each turn
-//   - messages.jsonl is polled for new assistant text (streamed as
-//     agent_message_chunk)
+//   - raw CLI events supply text/thinking deltas; completed transcripts
+//     recover missing final output
 //   - sessions run full-access, with a soft [[APPROVAL]]/[[QUESTION]]
 //     protocol instead of aside's desktop-only confirmation tools
 //   - [[APPROVAL]] blocks are translated to ACP requestPermission so Paseo
@@ -31,6 +31,7 @@ import {
   TranscriptReader,
   stripAnsi,
 } from "./lib/aside.js";
+import { JsonlTail, AsideTurnStream } from "./lib/stream.js";
 import {
   buildBootstrapPrompt,
   buildReminder,
@@ -53,11 +54,11 @@ import {
   EFFORT_LEVELS,
 } from "./lib/models.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const APPROVAL_LOOP_LIMIT = 4;
 const QUESTION_LOOP_LIMIT = 3;
 const PERMISSION_TIMEOUT_MS = 15 * 60 * 1000;
-const TRANSCRIPT_POLL_MS = 300;
+const EVENT_POLL_MS = 40;
 const GHOST_WAIT_TIMEOUT_MS = 180000;
 const EMPTY_TURN_RETRY_MS = 3000;
 const EMPTY_TURN_RETRIES = 2;
@@ -306,7 +307,7 @@ export class AsideACP {
     }
     for (const item of st.history || []) {
       await this.conn.sessionUpdate({ sessionId, update: {
-        sessionUpdate: item.role === "user" ? "user_message_chunk" : "agent_message_chunk",
+        sessionUpdate: item.role === "user" ? "user_message_chunk" : item.role === "reasoning" ? "agent_thought_chunk" : "agent_message_chunk",
         messageId: item.id,
         content: { type: "text", text: item.text },
       }});
@@ -625,7 +626,7 @@ export class AsideACP {
   }
 
   /**
-   * Run one aside exec turn and stream transcript text as chunks.
+   * Run one Aside turn and forward live text/thinking events as chunks.
    * Returns { stopReason, finalText, error }.
    */
   async runAsideTurn(st, sid, promptText) {
@@ -668,16 +669,38 @@ export class AsideACP {
     if (st.cancelRequested || this.disposing) return { stopReason: "cancelled", finalText: "" };
     const reader = new TranscriptReader(this.accountRoot, sid, log);
     reader.open();
+    // The CLI's raw-event option is global, including for session resume.
+    // Private per-turn files contain model output and are removed after CLI exit.
+    const eventDir = fs.mkdtempSync(path.join(os.tmpdir(), "aside-acp-events-"));
+    const eventFile = path.join(eventDir, "events.jsonl");
+    fs.writeFileSync(eventFile, "", { mode: 0o600 });
+    const events = new JsonlTail(eventFile, log);
+    const pending = new Set();
+    let historyDirty = false;
+    const stream = new AsideTurnStream((text, role, messageId) => {
+      historyDirty = true;
+      const sent = this.emitChunk(st.sessionId, text, { role, messageId, persist: false });
+      pending.add(sent);
+      void sent.finally(() => pending.delete(sent));
+    }, log);
     const args = this.buildExecArgs(sid, st);
+    args.unshift("--log-dump", eventFile);
     args.push(promptText);
     log(`turn exec (${st.sessionId}) ${stripAnsi(promptText).slice(0, 120)}...`);
 
-    const child = spawn(this.cli, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(this.cli, args, { stdio: ["ignore", "ignore", "pipe"] });
     st.child = child;
-    let stdout = "";
     let stderr = "";
-    child.stdout?.on("data", (d) => (stdout += d));
-    child.stderr?.on("data", (d) => (stderr += d));
+    child.stderr?.on("data", (d) => { stderr = (stderr + d).slice(-8192); });
+    const cleanupEvents = () => {
+      try { fs.rmSync(eventDir, { recursive: true, force: true }); }
+      catch (error) { log(`event cleanup failed: ${error.message}`); }
+    };
+    let turnFinished = false;
+    // Cancellation can resolve the turn before the native CLI has exited.
+    child.once("close", () => {
+      if (turnFinished) cleanupEvents();
+    });
 
     const finished = new Promise((resolve) => {
       st.finishTurn = (res) => resolve(res);
@@ -691,35 +714,42 @@ export class AsideACP {
       st.timeoutHit = true;
     }, timeoutMs);
 
-    let providerError = "";
-    let totalParts = 0;
-    const allParts = [];
-    const poll = setInterval(() => {
-      const rd = reader.read();
-      totalParts += rd.parts.length;
-      for (const p of rd.parts) {
-        allParts.push(p.text);
-        this.emitChunk(st.sessionId, p.text).catch(() => {});
+    const drain = () => {
+      for (const event of events.read()) stream.accept(event);
+    };
+    const poll = setInterval(drain, EVENT_POLL_MS);
+    const save = setInterval(() => {
+      if (!historyDirty) return;
+      historyDirty = false;
+      this.persistSession(st);
+    }, 250);
+
+    let res;
+    try {
+      res = await finished;
+      clearInterval(poll);
+      clearInterval(save);
+      // CLI flushes all raw events before normal exit. Read before deleting.
+      drain();
+      if (!st.cancelRequested) {
+        const rd = reader.read();
+        for (const message of rd.messages) stream.complete(message);
+        if (rd.errors.length) stream.error = rd.errors[rd.errors.length - 1];
       }
-      if (rd.errors.length) providerError = rd.errors[rd.errors.length - 1];
-    }, TRANSCRIPT_POLL_MS);
-
-    const res = await finished;
-    st.finishTurn = null;
-    clearInterval(poll);
-    clearTimeout(timer);
-    log(`turn finished (${st.sessionId}) res=${JSON.stringify(res)}`);
-
-    // final drain — fire-and-forget: awaiting sessionUpdate here can hang
-    // forever when the client connection is gone (Paseo closes the socket
-    // when it considers the agent idle), which wedges the whole turn.
-    const rd = reader.read();
-    totalParts += rd.parts.length;
-    for (const p of rd.parts) {
-      allParts.push(p.text);
-      this.emitChunk(st.sessionId, p.text).catch(() => {});
+      // Finish delivery before ACP prompt returns, bounded on disconnect.
+      await Promise.allSettled([...pending]);
+    } finally {
+      turnFinished = true;
+      st.finishTurn = null;
+      clearInterval(poll);
+      clearInterval(save);
+      clearTimeout(timer);
+      this.persistSession(st);
+      if (res?.err || child.exitCode !== null || child.signalCode !== null) cleanupEvents();
     }
-    if (rd.errors.length) providerError = rd.errors[rd.errors.length - 1];
+    const providerError = stream.error;
+    const totalParts = stream.textChunks;
+    log(`turn finished (${st.sessionId}) res=${JSON.stringify(res)} events=${stream.events}`);
 
     st.child = null;
     if (st.cancelRequested) {
@@ -747,34 +777,41 @@ export class AsideACP {
       await this.emitChunk(st.sessionId, `\n\n(aside exec failed: ${stripAnsi(stderr).slice(0, 300) || "unknown error"})`);
       return { stopReason: "error", finalText: "" };
     }
-    const finalText = allParts.join("\n");
+    const finalText = stream.finalText;
     // log stderr even on success — aside exec can exit 0 while silently
     // refusing the turn (steer-after-cancel), and the reason lives in stderr
     log(`turn exit=${res.code} parts=${totalParts} stderr=${stripAnsi(stderr).slice(0, 300)}`);
     return { stopReason: "end_turn", finalText, empty: totalParts === 0 };
   }
 
-  async emitChunk(acpSessionId, text) {
+  async emitChunk(acpSessionId, text, { role = "assistant", messageId, persist = true } = {}) {
     const st = this.sessions.get(acpSessionId);
+    messageId ??= st?.messageId ?? randomUUID();
     if (st) {
-      st.messageId ??= randomUUID();
       st.history ??= [];
-      const last = st.history[st.history.length - 1];
-      if (last?.id === st.messageId) last.text += text;
-      else st.history.push({ id: st.messageId, role: "assistant", text });
-      this.persistSession(st);
+      const existing = st.history.findLast((item) => item.id === messageId);
+      if (existing) existing.text += text;
+      else st.history.push({ id: messageId, role, text });
+      if (persist) this.persistSession(st);
     }
+    // A disconnected ACP writer may never resolve; do not wedge turn cleanup.
+    let timer;
     try {
-      await this.conn.sessionUpdate({
-        sessionId: acpSessionId,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          messageId: st?.messageId,
-          content: { type: "text", text },
-        },
-      });
+      await Promise.race([
+        this.conn.sessionUpdate({
+          sessionId: acpSessionId,
+          update: {
+            sessionUpdate: role === "reasoning" ? "agent_thought_chunk" : "agent_message_chunk",
+            messageId,
+            content: { type: "text", text },
+          },
+        }),
+        new Promise((resolve) => { timer = setTimeout(resolve, 2000); }),
+      ]);
     } catch {
-      /* client gone — keep running, transcripts persist */
+      /* client gone — keep running, history persists */
+    } finally {
+      clearTimeout(timer);
     }
   }
 

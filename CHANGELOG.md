@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Forward real text and thinking deltas from Aside CLI’s live raw-event log.
+- Deduplicate message snapshots and final transcripts; retain partial UTF-8 JSONL records.
+- Replay reasoning separately from assistant replies, batch history writes and bound disconnected notifications.
+- Remove private per-turn event files after CLI exit and surface transcript provider errors.
+
 ## 0.2.0
 
 - Register Aside as a Paseo provider plugin through the official ACP shim.

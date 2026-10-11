@@ -1,5 +1,11 @@
 # Verification
 
+## 0.2.1 streaming update
+
+Static type and syntax checks only. The live event contract was inspected in the installed Aside CLI 1.26.1010.1739: `--log-dump` writes `message_update` text/thinking deltas and flushes before successful exit. No new agent turns or UI tests were run for this update. Browser tool calls remain unrendered.
+
+## Earlier 0.2.0 checks
+
 Verified locally on 2026-10-11 (Asia/Singapore) with Paseo 0.11.2, Aside CLI 1.26.1010.1739 and a signed-in macOS Aside account.
 
 | Check | Result |

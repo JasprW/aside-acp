@@ -289,7 +289,7 @@ export class TranscriptReader {
    * full re-read; the seen-set dedupes so nothing double-emits.
    */
   read() {
-    const out = { parts: [], errors: [] };
+    const out = { parts: [], errors: [], messages: [] };
     if (!this.ready || !fs.existsSync(this.path)) return out;
     let buf;
     try {
@@ -302,8 +302,10 @@ export class TranscriptReader {
       return out;
     }
     const start = buf.length >= this.offset ? this.offset : 0; // rewrite → full scan
-    const data = buf.toString("utf8", start);
-    this.offset = buf.length;
+    const end = buf.lastIndexOf(10);
+    if (end < start) return out;
+    const data = buf.toString("utf8", start, end + 1);
+    this.offset = end + 1;
     for (const line of data.split("\n")) {
       if (!line.trim()) continue;
       let m;
@@ -313,12 +315,12 @@ export class TranscriptReader {
         continue; // partial line while still being written
       }
       if (m.role !== "assistant") continue;
-      // Only the FINAL assistant reply counts as output. Aside emits
-      // step-by-step thinking text before each tool call; streaming that
-      // pollutes Paseo's timeline with the agent's internal monologue.
-      // ACP has no thinking/reasoning content type in this SDK version, so
-      // intermediate assistant text is dropped entirely.
+      if (m.stopReason === "error" && m.errorMessage) {
+        out.errors.push(String(m.errorMessage));
+      }
+      // Completed transcripts are a recovery source, not the live stream.
       if (!["stop", "end_turn"].includes(m.stopReason)) continue;
+      out.messages.push(m);
       const content = Array.isArray(m.content) ? m.content : [];
       content.forEach((c, i) => {
         if (!c || c.type !== "text" || typeof c.text !== "string") return;
@@ -327,9 +329,6 @@ export class TranscriptReader {
         this.seen.add(key);
         out.parts.push({ responseId: m.responseId, text: c.text });
       });
-      if (m.stopReason === "error" && m.errorMessage) {
-        out.errors.push(String(m.errorMessage));
-      }
     }
     return out;
   }

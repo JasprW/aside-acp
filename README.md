@@ -82,14 +82,16 @@ Paseo provider API → official runAcpProvider shim → ACP object streams
 
 The plugin bundles the bridge, so no project-specific Node path or separately installed `aside-acp` executable is needed. The official Paseo ACP shim handles model controls, approval UI and timeline conversion.
 
-The bridge creates Aside sessions lazily on the first prompt, polls `messages.jsonl` for assistant text, and stores session mappings plus replayable conversation text in `~/.aside-acp/sessions`. Reloading an agent resumes the same Aside session. Model and thinking changes are applied to that session through Aside's session API.
+The bridge creates Aside sessions lazily on the first prompt, tails Aside CLI’s live `--log-dump` events for text and thinking deltas, and stores session mappings plus replayable conversation text in `~/.aside-acp/sessions`. Reloading an agent resumes the same Aside session. Model and thinking changes are applied to that session through Aside's session API.
 
 Approvals use the existing `[[APPROVAL]]` convention and appear as Paseo permission requests. `[[QUESTION]]` requests become forms when the ACP client supports elicitation; otherwise they remain text questions. Cancellation terminates the CLI turn, whose SIGTERM handler cancels the native Aside task.
 
 ## Limits and permissions
 
 - Full access is enabled by default. The model is instructed to ask before external actions. This convention is prompt based and is not an enforced permission boundary.
-- Only assistant text is streamed. Browser tool calls and model thinking are not individually rendered in Paseo.
+- Assistant text streams while it is generated. Thinking streams into Paseo’s reasoning rows when the model exposes it. Browser tool calls are not individually rendered.
+- The bridge uses the CLI’s hidden `--log-dump` option, inspected in Aside CLI 1.26.1010.1739. It tails real events every 40 ms, deduplicates final snapshots, and falls back to completed transcripts for missing final text. Intermediate assistant commentary may appear before the final answer.
+- Raw events are written to private temporary files and removed after the CLI exits. Text and reasoning history are saved in `~/.aside-acp/sessions`.
 - Image/audio prompts and MCP servers are unsupported.
 - The connector uses the daemon's local configuration and Aside browser profile. Remote Aside hosts are not configured by this plugin.
 - Conversation text is stored locally for replay. Diagnostic logs can contain prompts and model errors.

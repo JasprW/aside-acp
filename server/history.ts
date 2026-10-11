@@ -5,7 +5,7 @@ import type { ProviderRegistration } from "@getpaseo/plugin/server/provider";
 import { z } from "zod";
 
 const historySchema = z.object({
-  items: z.array(z.object({ id: z.string().min(1), role: z.enum(["user", "assistant"]), text: z.string() })),
+  items: z.array(z.object({ id: z.string().min(1), role: z.enum(["user", "assistant", "reasoning"]), text: z.string() })),
 });
 
 // The ACP shim drops chunks during session/load and ignores replayed user
@@ -40,7 +40,7 @@ export function withAsideHistory(provider: ProviderRegistration): ProviderRegist
                     listener({
                       type: "timeline.item",
                       sessionId: event.sessionId,
-                      item: { type: item.role === "user" ? "user_message" : "assistant_message", id: item.id, text: item.text },
+                      item: { type: item.role === "user" ? "user_message" : item.role === "reasoning" ? "reasoning" : "assistant_message", id: item.id, text: item.text },
                     });
                   }
                 } catch (error) { console.error("Aside history replay failed", error); }

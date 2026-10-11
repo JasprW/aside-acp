@@ -12,7 +12,7 @@ export function createAsideConnector() {
     const agent = await connectAsideAgent({
       writable: toClient.writable,
       readable: toAgent.readable,
-    });
+    }, { nativeQuestions: true });
     if (disposed) {
       await agent.dispose();
       throw new Error("Aside plugin was unloaded while connecting");

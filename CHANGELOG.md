@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Relay native Aside questions into Paseo's existing question form as soon as the session pauses, without waiting for a final assistant reply.
+- Support single/multiple choices, multiple questions, option descriptions and custom text answers.
+- Return answers to the original native suspension; dismiss through native rejection rather than fabricating a choice.
+- Reuse stale-request checks, external-response withdrawal, cancellation and reconnect handling for questions.
+- Prefer native `ask_user_question` in Paseo prompts while retaining standalone ACP's form/text fallback.
+
 ## 0.4.1
 
 - Fix authentication in Paseo's macOS Electron runtime: native addon Team ID validation and Aside Keychain entitlements prevent direct helper loading.

@@ -1,5 +1,11 @@
 # Verification
 
+## 0.5.0 interactive native questions
+
+Question-form input/answer contracts were read from Paseo 0.11.2, and Aside's `ask-user-question`, `multiple`, ordered `answers` and ID-checked rejection contracts were inspected from the installed native daemon. Type/syntax/diff checks and hot-update status are checked for this release. No automated tests or model turns are run for this feature; actual question rendering and submitting/dismissing remain for user testing.
+
+Manual checks: ask Aside to call `ask_user_question` with one single choice, one multiple choice and a custom answer; verify the form appears while the task is paused and resumes the same task on submit. Also check multiple/duplicate headers, dismissal, an answer made in Aside, interrupt/reconnect and stale replies. Plain standalone ACP clients retain their existing fallback.
+
 ## 0.4.1 Electron authentication fix
 
 The user-reported missing-helper error was reproduced as a code-signing failure in Paseo Helper (Electron 44.2.0, Node 24.20.0): macOS rejects Aside's native addon because its Team ID differs from Paseo's. The file exists, and standalone Node can load it, but signing then fails with SecItemCopyMatching -34018 because Node lacks Aside's Keychain entitlement. Updating the installed CLI was not the remedy.

@@ -58,7 +58,7 @@ import {
   EFFORT_LEVELS,
 } from "./lib/models.js";
 
-const VERSION = "0.4.1";
+const VERSION = "0.5.0";
 const APPROVAL_LOOP_LIMIT = 4;
 const QUESTION_LOOP_LIMIT = 3;
 const PERMISSION_TIMEOUT_MS = 15 * 60 * 1000;
@@ -438,7 +438,7 @@ export class AsideACP {
     const st = this.sessions.get(params.sessionId);
     if (!st) throw new Error(`Session ${params.sessionId} not found`);
     const text = extractPromptText(params);
-    const full = text + buildReminder(this.config.style);
+    const full = text + buildReminder(this.config.style, this.config.native_questions);
     if (st.busy) {
       // Serialize like the bridge queue: run after the current turn.
       return await new Promise((resolve, reject) => {
@@ -595,7 +595,7 @@ export class AsideACP {
   async primeSession(st) {
     const t0 = Date.now();
     const marker = `${BOOTSTRAP_MARKER}:${st.sessionId}`;
-    const boot = buildBootstrapPrompt(this.config.style, this.config.owner_name) + `\nConnection: ${marker}\nInitialization only: do not call tools or take any actions. Reply with one brief acknowledgement.`;
+    const boot = buildBootstrapPrompt(this.config.style, this.config.owner_name, this.config.native_questions) + `\nConnection: ${marker}\nInitialization only: do not call tools or take any actions. Reply with one brief acknowledgement.`;
     const args = this.buildExecArgs(null, st);
     args.push(boot);
     log(`bootstrap exec (session ${st.sessionId})`);
@@ -1055,8 +1055,8 @@ function extractPromptText(params) {
 }
 
 /** Create the same ACP agent for stdio and Paseo's in-process connector. */
-export async function connectAsideAgent(stream) {
-  const agent = new AsideACP(null, loadConfig());
+export async function connectAsideAgent(stream, options = {}) {
+  const agent = new AsideACP(null, { ...loadConfig(), native_questions: options.nativeQuestions === true });
   await agent.init();
   const connection = new AgentSideConnection((conn) => {
     agent.conn = conn;

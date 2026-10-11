@@ -99,7 +99,7 @@ The plugin bundles the bridge, so no project-specific Node path or separately in
 
 The bridge creates Aside sessions lazily on the first prompt, tails Aside CLI’s live `--log-dump` events for text and thinking deltas, and stores session mappings plus replayable conversation text in `~/.aside-acp/sessions`. Reloading an agent resumes the same Aside session. Model and thinking changes are applied to that session through Aside's session API.
 
-The provider relays Aside native approval and action-confirmation requests into Paseo permission UI. The standalone stdio ACP server exposes settings and legacy approvals; native suspension buttons require the Paseo wrapper or Aside desktop UI. `[[QUESTION]]` requests become forms when the ACP client supports elicitation; otherwise they remain text questions. Cancellation terminates the CLI turn, whose SIGTERM handler cancels the native Aside task.
+The provider relays native approvals, action confirmations and interactive questions into Paseo UI. The standalone stdio ACP server exposes settings and legacy approvals; native suspension forms require the Paseo wrapper or Aside desktop UI. Standalone `[[QUESTION]]` requests become forms when the ACP client supports elicitation; otherwise they remain text questions. Cancellation terminates the CLI turn, whose SIGTERM handler cancels the native Aside task.
 
 ## Permission modes and Final confirm
 
@@ -128,7 +128,13 @@ Aside CLI creates sessions with Final confirm off and does not support creating 
 
 The bridge authenticates to the **local loopback Aside daemon** by launching the signed Aside CLI's read-only `account status` command through a temporary loopback authentication relay. The CLI uses its own native helper and Keychain entitlements; Paseo never loads that native addon. The relay forwards only authentication and read-only account routes, closes immediately after the command, and never changes session settings. Session tokens stay in memory; keys/tokens are not copied into config, mappings or diagnostics. Only the selected account and bound session are addressed. Updating confirmation alone preserves Aside's remembered permission grants. This integration uses inspected native daemon APIs and requires a daemon exposing suspension IDs (inspected in 1.26.1011.1437). Remote Aside daemons are unsupported.
 
-Native `ask-user-question` suspensions from imported chats still need an answer in Aside and produce a visible notice. New bridge tasks use `[[QUESTION]]` forms when the ACP client supports elicitation, or text questions otherwise.
+## Interactive questions
+
+The Paseo plugin relays native `ask_user_question` requests into Paseo's existing question form while the original Aside tool is paused. It discovers pending requests every 600 ms, so questions appear during the task rather than after the final reply. Single choice, multiple choice, multiple questions and custom text answers are supported. Submit returns the answers to the original native suspension and the same task continues; Dismiss rejects that question without inventing an answer or granting permission.
+
+Imported/resumed chats use the same relay. Requests answered in Aside disappear from Paseo. Interrupting a task or unloading the plugin withdraws the form; stale replies cannot answer a different question. Duplicate or empty native headers are given distinct display labels and restored on reply. New Paseo prompts tell Aside to use its native question tool, superseding earlier bridge instructions.
+
+This uses Paseo's provider question API, so it works without ACP elicitation support in Paseo. The standalone ACP bridge retains its capability-negotiated `[[QUESTION]]` form/text fallback; native suspensions in plain ACP clients still require Aside's UI. A model that ignores the native-tool instruction and writes a text question still receives ordinary follow-up messages. Waiting for input remains subject to `exec_timeout_seconds`.
 
 ## Limits and permissions
 

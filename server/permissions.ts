@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ProviderEvent, ProviderPermissionRequest, ProviderRegistration } from "@getpaseo/plugin/server/provider";
 import { detectAccountRoot, loadConfig } from "./lib/aside.js";
 import { activeSuspension, getNativeClient, suspensionKey, type NativeSuspension } from "./lib/native.js";
+import { questionRequest, questionResponse } from "./questions.js";
 
 const PREFIX = "aside-native:";
 const POLL_MS = 600;
@@ -12,6 +13,7 @@ type JsonValue = NonNullable<ProviderPermissionRequest["input"]>[string];
 
 function permissionRequest(suspension: NativeSuspension): ProviderPermissionRequest {
   const id = PREFIX + createHash("sha256").update(suspensionKey(suspension)).digest("hex");
+  if (suspension.kind === "ask-user-question") return questionRequest(id, suspension);
   const confirm = suspension.kind === "action-confirmation";
   const request = suspension.request;
   const scope = request.scope;
@@ -36,7 +38,7 @@ function permissionRequest(suspension: NativeSuspension): ProviderPermissionRequ
   };
 }
 
-/** Relay real Aside tool suspensions through Paseo's standard permission UI. */
+/** Relay real Aside approvals and questions through Paseo's standard UI. */
 export function withAsidePermissions(provider: ProviderRegistration): ProviderRegistration {
   return {
     ...provider,
@@ -104,10 +106,6 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
           const key = suspension ? suspensionKey(suspension) : null;
           if (watch.pending && watch.pending.key !== key) withdraw(sessionId, watch);
           if (!suspension || watch.pending || watch.ignored.has(key!)) { notice(sessionId, watch); return; }
-          if (suspension.kind === "ask-user-question") {
-            notice(sessionId, watch, "Aside is waiting for a native question. Answer it in Aside. New bridge tasks use the supported question protocol.");
-            return;
-          }
           if (!suspension.id) throw new Error("Update Aside: this daemon does not expose suspension IDs needed for safe permission replies.");
           const permission = permissionRequest(suspension);
           watch.pending = { key: key!, suspension, request: permission };
@@ -154,10 +152,12 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
               throw new Error("This Aside permission request has expired");
             }
             if (watch.answering) throw new Error("This Aside permission is already being answered");
+            const isQuestion = pending.suspension.kind === "ask-user-question";
+            const answer = isQuestion && input.response.behavior === "allow" ? questionResponse(pending.suspension, input.response) : undefined;
             const actionId = input.response.selectedActionId ?? (input.response.behavior === "allow" ? "allow" : "deny");
             const action = pending.request.actions?.find((item) => item.id === actionId && item.behavior === input.response.behavior);
-            if (!action) throw new Error("Invalid Aside permission action");
-            if (input.response.behavior === "allow" &&
+            if (!isQuestion && !action) throw new Error("Invalid Aside permission action");
+            if (!isQuestion && input.response.behavior === "allow" &&
                 (input.response.updatedInput != null || input.response.updatedPermissions?.length)) {
               throw new Error("Aside approvals cannot edit the pending operation. Change it in Aside and approve its new request.");
             }
@@ -170,10 +170,14 @@ export function withAsidePermissions(provider: ProviderRegistration): ProviderRe
                 withdraw(input.sessionId, watch);
                 throw new Error("This Aside permission was already answered or changed. No decision was sent.");
               }
-              const response = pending.suspension.kind === "approval"
-                ? { verdict: action.behavior === "allow" ? "allow" : "deny", always: actionId === "always" }
-                : { verdict: action.behavior === "allow" ? "confirm" : "cancel", ...(input.response.behavior === "deny" && input.response.message ? { instruction: input.response.message } : {}) };
-              await client.resolveSuspension(account, watch.nativeId, pending.suspension, response);
+              if (isQuestion && input.response.behavior === "deny") {
+                await client.rejectSuspension(account, watch.nativeId, pending.suspension, input.response.message || "The user declined to answer. Do not assume a choice or approval.");
+              } else {
+                const response = answer ?? (pending.suspension.kind === "approval"
+                  ? { verdict: action!.behavior === "allow" ? "allow" : "deny", always: actionId === "always" }
+                  : { verdict: action!.behavior === "allow" ? "confirm" : "cancel", ...(input.response.behavior === "deny" && input.response.message ? { instruction: input.response.message } : {}) });
+                await client.resolveSuspension(account, watch.nativeId, pending.suspension, response);
+              }
               if (watch.pending === pending) withdraw(input.sessionId, watch);
               notice(input.sessionId, watch);
               if (input.response.behavior === "deny" && input.response.interrupt) {

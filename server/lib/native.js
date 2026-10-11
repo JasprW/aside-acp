@@ -159,6 +159,13 @@ class NativeClient {
       ...(suspension.id ? { suspensionId: suspension.id } : {}), response,
     }, true);
   }
+
+  rejectSuspension(accountId, sessionId, suspension, error) {
+    return this.call("sessions.rejectSuspension", {
+      accountId, sessionId, toolCallId: suspension.toolCallId,
+      ...(suspension.id ? { suspensionId: suspension.id } : {}), error,
+    }, true);
+  }
 }
 
 /** A memory-only authenticated client for the user's local Aside daemon. */

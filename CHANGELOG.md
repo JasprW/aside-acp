@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Preserve upstream error reasons and request IDs in ACP failures.
+- Report failures once through Paseo’s error UI instead of adding an assistant error message followed by a generic failure.
+- Surface CLI and timeout details; content-filter rejections remain failures and are not automatically retried.
+
 ## 0.2.1
 
 - Forward real text and thinking deltas from Aside CLI’s live raw-event log.

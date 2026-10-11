@@ -32,6 +32,7 @@ import {
   stripAnsi,
 } from "./lib/aside.js";
 import { JsonlTail, AsideTurnStream } from "./lib/stream.js";
+import { providerErrorMessage } from "./lib/errors.js";
 import {
   buildBootstrapPrompt,
   buildReminder,
@@ -54,7 +55,7 @@ import {
   EFFORT_LEVELS,
 } from "./lib/models.js";
 
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const APPROVAL_LOOP_LIMIT = 4;
 const QUESTION_LOOP_LIMIT = 3;
 const PERMISSION_TIMEOUT_MS = 15 * 60 * 1000;
@@ -761,21 +762,15 @@ export class AsideACP {
     }
     if (st.timeoutHit) {
       st.timeoutHit = false;
-      await this.emitChunk(
-        st.sessionId,
-        `\n\n(turn timed out after ${Math.round(timeoutMs / 1000)}s)`,
-      );
-      return { stopReason: "error", finalText: "" };
+      return { stopReason: "error", finalText: "", error: `Aside turn timed out after ${Math.round(timeoutMs / 1000)}s` };
     }
     if (providerError) {
       log(`provider error: ${providerError}`);
-      await this.emitChunk(st.sessionId, `\n\n(the model provider refused that turn: ${providerError})`);
-      return { stopReason: "error", finalText: "" };
+      return { stopReason: "error", finalText: "", error: providerErrorMessage(providerError) };
     }
     if (res.err || res.code !== 0) {
       log(`aside exec failed: code=${res.code} ${stripAnsi(stderr).slice(0, 300)}`);
-      await this.emitChunk(st.sessionId, `\n\n(aside exec failed: ${stripAnsi(stderr).slice(0, 300) || "unknown error"})`);
-      return { stopReason: "error", finalText: "" };
+      return { stopReason: "error", finalText: "", error: `Aside CLI failed: ${stripAnsi(stderr).trim().slice(0, 1000) || res.err?.message || `exit ${res.code}`}` };
     }
     const finalText = stream.finalText;
     // log stderr even on success — aside exec can exit 0 while silently

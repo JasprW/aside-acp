@@ -89,6 +89,7 @@ Approvals use the existing `[[APPROVAL]]` convention and appear as Paseo permiss
 ## Limits and permissions
 
 - Full access is enabled by default. The model is instructed to ask before external actions. This convention is prompt based and is not an enforced permission boundary.
+- Upstream errors are reported once with their specific reason and request ID when supplied. Content-filter rejections are not automatically retried.
 - Assistant text streams while it is generated. Thinking streams into Paseo’s reasoning rows when the model exposes it. Browser tool calls are not individually rendered.
 - The bridge uses the CLI’s hidden `--log-dump` option, inspected in Aside CLI 1.26.1010.1739. It tails real events every 40 ms, deduplicates final snapshots, and falls back to completed transcripts for missing final text. Intermediate assistant commentary may appear before the final answer.
 - Raw events are written to private temporary files and removed after the CLI exits. Text and reasoning history are saved in `~/.aside-acp/sessions`.

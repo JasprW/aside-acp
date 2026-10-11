@@ -1,5 +1,9 @@
 # Verification
 
+## 0.2.2 error reporting
+
+Static type/syntax checks only; no new agent turns or UI tests. Existing user-run logs show a successful streamed turn followed by an upstream `Output blocked by content filtering policy` error. This update preserves that cause instead of replacing it with `Aside turn failed`.
+
 ## 0.2.1 streaming update
 
 Static type and syntax checks only. The live event contract was inspected in the installed Aside CLI 1.26.1010.1739: `--log-dump` writes `message_update` text/thinking deltas and flushes before successful exit. No new agent turns or UI tests were run for this update. Browser tool calls remain unrendered.

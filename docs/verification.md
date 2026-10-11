@@ -1,5 +1,9 @@
 # Verification
 
+## 0.3.1 native permission modes
+
+Static type/syntax checks only. Aside CLI help, built-in Aside skill, desktop permission schemas/templates and the local session index were inspected read-only. No automated tests, permission mutations, model turns or visual UI checks were run for this update. Mode switching, Read only initialization and native confirmation UI remain for manual testing.
+
 ## 0.3.0 native history import
 
 Static type/syntax checks only; no automated tests, imports or new agent turns were run. The discovery, ACP list and replay contracts were read from Paseo 0.11.2. Aside session metadata and transcript layouts were inspected read-only on the local installation. Import UI rendering and continuation remain for manual testing.

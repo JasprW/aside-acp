@@ -31,7 +31,7 @@ async function querySessions(accountRoot, where) {
   if (!fs.existsSync(database)) throw new Error("Aside session index not found; start and sign in to Aside on this daemon machine");
   // macOS ships sqlite3. No native npm binding or database writes are needed.
   const sqlite = process.platform === "darwin" ? "/usr/bin/sqlite3" : "sqlite3";
-  const query = `SELECT id, title, cwd, model, updated_at, created_at FROM sessions WHERE ${where} ORDER BY updated_at DESC, id ASC`;
+  const query = `SELECT id, title, cwd, model, permission_mode, updated_at, created_at FROM sessions WHERE ${where} ORDER BY updated_at DESC, id ASC`;
   const result = await execAsync(sqlite, ["-readonly", "-json", "-cmd", ".timeout 5000", database, query], { timeoutMs: 15000 });
   if (result.timedOut || result.code !== 0) {
     throw new Error(`Cannot read Aside session index: ${result.stderr.trim() || "SQLite timed out"}`);
@@ -86,7 +86,7 @@ export async function getAsideSession(accountRoot, sid) {
   const row = rows[0];
   let model = {};
   try { model = JSON.parse(row.model || "{}"); } catch { /* use composer defaults */ }
-  return { sid, cwd: sessionCwd(row, accountRoot), model: model.provider && model.modelId ? `${model.provider}/${model.modelId}` : null, effort: model.thinkingLevel ?? null };
+  return { sid, cwd: sessionCwd(row, accountRoot), model: model.provider && model.modelId ? `${model.provider}/${model.modelId}` : null, effort: model.thinkingLevel ?? null, permissionMode: row.permission_mode };
 }
 
 /** Read native user/assistant/reasoning text without browser tool results or attachments. */

@@ -12,5 +12,5 @@ export function listAsideSessions(options?: {
   limit?: number;
 }): Promise<AsideSessionSummary[]>;
 export function parseNativeSessionId(sessionId: string, accountRoot: string): string | null;
-export function getAsideSession(accountRoot: string, sid: string): Promise<{ sid: string; cwd: string; model: string | null; effort: string | null }>;
+export function getAsideSession(accountRoot: string, sid: string): Promise<{ sid: string; cwd: string; model: string | null; effort: string | null; permissionMode: string | null }>;
 export function readAsideHistory(accountRoot: string, sid: string): Promise<Array<{ id: string; role: "user" | "assistant" | "reasoning"; text: string }>>;

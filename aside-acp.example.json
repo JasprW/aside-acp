@@ -7,6 +7,6 @@
   "default_effort": "medium",
   "exec_timeout_seconds": 1200,
   "style": "formal",
-  "grant_full_access": true,
-  "approved_models": null
+  "approved_models": null,
+  "default_permission": "full-access"
 }

@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isPermissionMode } from "./permissions.js";
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 
@@ -31,8 +32,12 @@ export function loadConfig() {
     exec_timeout_seconds: Number(file.exec_timeout_seconds || 1200),
     style: file.style || "formal",
     grant_full_access: file.grant_full_access !== false,
+    default_permission: file.default_permission ?? (file.grant_full_access !== false ? "full-access" : "guard"),
     approved_models: file.approved_models ?? null,
   };
+  if (!isPermissionMode(config.default_permission)) {
+    throw new Error(`Invalid Aside default_permission: ${config.default_permission}`);
+  }
   return config;
 }
 

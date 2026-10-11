@@ -4,7 +4,7 @@
 
 Unofficial community integration. Not affiliated with or endorsed by Aside.
 
-Use [Aside](https://aside.com)'s browser agent from [Paseo](https://paseo.sh). Select **Aside** when creating an agent, choose a model and thinking effort, then send browser tasks from desktop or mobile.
+Use [Aside](https://aside.com)'s browser agent from [Paseo](https://paseo.sh). Select **Aside** when creating an agent, choose a model, thinking effort and permission mode, then send browser tasks from desktop or mobile.
 
 The same project also provides an ACP server over stdio for other ACP clients.
 
@@ -76,7 +76,8 @@ Copy `aside-acp.example.json` to `~/.aside-acp.json` if you need to customize th
 | `exec_timeout_seconds` | Maximum time per turn, default 1200 seconds |
 | `style` | Bridge persona, `formal` or `casual` |
 | `owner_name` | Name used in the bridge persona |
-| `grant_full_access` | Run Aside sessions with full access; default `true` |
+| `default_permission` | Initial mode for new chats: `read-only`, `guard` or `full-access` |
+| `grant_full_access` | Legacy fallback when `default_permission` is absent: `true` means Full access, `false` means Guard; defaults to `true` |
 
 Environment overrides: `ASIDE_ACP_CONFIG` selects the configuration file, `ASIDE_ACP_CLI` selects the executable, and `ASIDE_HOME` selects Aside's data directory. `ASIDE_ACP_LOG_FILE` optionally records bridge diagnostics. Reload the plugin after changing daemon environment variables. Per-agent Paseo environment overrides are not forwarded by the in-process ACP connector.
 
@@ -98,9 +99,19 @@ The bridge creates Aside sessions lazily on the first prompt, tails Aside CLI’
 
 Approvals use the existing `[[APPROVAL]]` convention and appear as Paseo permission requests. `[[QUESTION]]` requests become forms when the ACP client supports elicitation; otherwise they remain text questions. Cancellation terminates the CLI turn, whose SIGTERM handler cancels the native Aside task.
 
+## Permission modes
+
+Paseo’s mode selector exposes Aside’s native **Read only**, **Guard** and **Full access** modes, with the same descriptions as Aside’s desktop selector. Changing a mode updates the original session through `aside.sessions.update({ permissionMode })`, including its runtime permission config. The bridge reads back the committed mode before reporting success. Failed changes report an error and keep the previous selection.
+
+Imports and reconnects read the native session’s permission mode. Older Paseo agents with the placeholder `Auto` retain that native mode. Explicit mode selections in Paseo are applied normally. The selected mode is checked against native state before each task. Changes made in Aside are read on reconnect; the plugin does not continuously subscribe to Aside’s desktop selector.
+
+For new chats, `default_permission` takes precedence over legacy `grant_full_access`. Existing defaults remain compatible. Aside CLI cannot create Read only chats directly: the bridge initializes with Guard using an acknowledgement-only prompt, then applies Read only through the native API before sending the first user task. If this update fails, the task is not sent.
+
+Aside’s own folder-access confirmations in Guard still use Aside’s confirmation UI. The bridge’s `[[APPROVAL]]` convention provides separate Paseo approvals for model-requested external actions; it does not replace native folder confirmations or override the selected mode.
+
 ## Limits and permissions
 
-- Full access is enabled by default. The model is instructed to ask before external actions. This convention is prompt based and is not an enforced permission boundary.
+- The legacy default remains Full access unless `default_permission` or `grant_full_access` selects another mode. Native permission restrictions are enforced by Aside. The additional model-requested external-action approval convention is prompt based.
 - Upstream errors are reported once with their specific reason and request ID when supplied. Content-filter rejections are not automatically retried.
 - Assistant text streams while it is generated. Thinking streams into Paseo’s reasoning rows when the model exposes it. Browser tool calls are not individually rendered.
 - The bridge uses the CLI’s hidden `--log-dump` option, inspected in Aside CLI 1.26.1010.1739. It tails real events every 40 ms, deduplicates final snapshots, and falls back to completed transcripts for missing final text. Intermediate assistant commentary may appear before the final answer.

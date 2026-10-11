@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- Expose native Read only, Guard and Full access in Paseo’s mode selector.
+- Apply changes through Aside’s session API and read back committed permission state.
+- Preserve native permissions on import/resume and handle older placeholder Auto modes.
+- Check the selected permission before each task; configure new-chat defaults with `default_permission` and retain legacy configuration compatibility.
+- Initialize Read only chats with Guard, then apply Read only before the first user task; report update failures explicitly.
+
 ## 0.3.0
 
 - Use Aside’s official brand assets for plugin and provider icons; label the integration unofficial.

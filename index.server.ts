@@ -3,6 +3,7 @@ import { runAcpProvider } from "@getpaseo/plugin/server/acp";
 import { createAsideConnector } from "./server/connector.js";
 import { withAsideHistory } from "./server/history.js";
 import { withAsideSessions } from "./server/sessions.js";
+import { legacyAsideMode } from "./server/modes.js";
 
 export default function contribute(server: PluginServerContext) {
   const aside = createAsideConnector();
@@ -12,6 +13,7 @@ export default function contribute(server: PluginServerContext) {
     description: "Aside browser agent with your local browser profile",
     icon: "icon.svg",
     connector: aside.connect,
+    transformers: [legacyAsideMode],
   }))));
   return aside.dispose;
 }

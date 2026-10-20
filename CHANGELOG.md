@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2 (2026-10-20)
+
+- Drop the Paseo version upper bound. The plugin now requires Paseo 0.11.2 or later instead of `<0.12.0`, so it keeps loading on newer hosts.
+
 ## 0.5.1 (2026-10-11)
 
 - Fix headless Guard requests being denied before an approval exists. Use Aside's supported branch API before the next task, preserving history, concrete permissions, model, browser binding and the source chat.

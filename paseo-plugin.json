@@ -3,7 +3,7 @@
   "name": "Aside browser agent (unofficial)",
   "description": "Unofficial Aside integration for Paseo with streaming, model controls, session resume and native history import.",
   "requirements": {
-    "paseo": ">=0.11.2 <0.12.0"
+    "paseo": ">=0.11.2"
   },
   "build": [
     [

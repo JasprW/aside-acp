@@ -59,7 +59,7 @@ import {
   EFFORT_LEVELS,
 } from "./lib/models.js";
 
-const VERSION = "0.5.1";
+const VERSION = "0.5.2";
 const APPROVAL_LOOP_LIMIT = 4;
 const QUESTION_LOOP_LIMIT = 3;
 const PERMISSION_TIMEOUT_MS = 15 * 60 * 1000;

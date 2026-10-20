@@ -18,7 +18,7 @@ Use only one Aside provider installation at a time. This repository retains its 
 
 ## Requirements
 
-- Paseo 0.11.2, with trusted plugins enabled.
+- Paseo 0.11.2 or later, with trusted plugins enabled.
 - Aside running and signed in on the daemon machine, with its CLI installed.
 - Aside local daemon 1.26.1011.1437 or newer with native suspension IDs and the CLI authentication helper.
 - Aside CLI 1.26.1010.1739 or newer. This bridge uses `session resume`, `session stop`, and session model updates.
